@@ -1,3 +1,4 @@
+# Needs Python 3.11+ (yt-dlp and deno do not support older versions)
 # Game
 pygame-ce>=2.4          # drop-in "import pygame"; classic pygame>=2.1 also works
 numpy>=1.24

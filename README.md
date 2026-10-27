@@ -11,11 +11,12 @@ You get a 4-key note highway in the style of rhythm-plus and Friday Night Funkin
 
 ## Quick start
 
-Requires Python 3.10+.
+Requires **Python 3.11 or newer** (yt-dlp and deno need it). On a Mac, the built-in `python3` is usually 3.9 - too old. Install a current Python from [python.org](https://www.python.org/downloads/) or with Homebrew (`brew install python@3.12`) first.
 
 ```bash
-python -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 python run.py                      # or: python -m cliq
 ```

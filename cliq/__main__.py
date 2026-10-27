@@ -11,6 +11,11 @@ from __future__ import annotations
 import argparse
 import sys
 
+if sys.version_info < (3, 11):
+    sys.exit(f"Cliq needs Python 3.11 or newer (this is {sys.version.split()[0]}).\n"
+             "Install it from https://www.python.org/downloads/ (or `brew install python@3.12`),\n"
+             "then create a fresh virtual environment with it - see README.md.")
+
 
 def _import(args) -> int:
     from . import paths
