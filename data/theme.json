@@ -1,0 +1,42 @@
+{
+  "_comment": "Colours are hex strings. 'lane_colors' is keyed by arrow direction so every skin and lane count stays consistent.",
+  "fonts": {
+    "display": "LilitaOne-Regular.ttf",
+    "ui": "Fredoka-SemiBold.ttf",
+    "bold": "Fredoka-Bold.ttf"
+  },
+  "colors": {
+    "ink": "#1B1236",
+    "ink_soft": "#2E2160",
+    "text": "#FFFFFF",
+    "text_dim": "#CFC6F5",
+    "bg_top": "#5B3CF0",
+    "bg_mid": "#8B3FE0",
+    "bg_bottom": "#FF6FA8",
+    "panel": "#20164A",
+    "panel_light": "#3A2B7A",
+    "accent": "#FF4FA3",
+    "accent2": "#FFD23F",
+    "accent3": "#3DDCFF",
+    "accent4": "#7CFF6B",
+    "accent5": "#FF8A3D",
+    "good": "#5CFF8F",
+    "bad": "#FF4F6A",
+    "receptor": "#4A3D86",
+    "receptor_edge": "#C9C0F2"
+  },
+  "lane_colors": {
+    "left": "#C46BFF",
+    "down": "#2EE6FF",
+    "up": "#57F287",
+    "right": "#FF5470",
+    "center": "#FFD23F"
+  },
+  "lane_directions": {
+    "4": ["left", "down", "up", "right"],
+    "5": ["left", "down", "center", "up", "right"],
+    "6": ["left", "down", "right", "left", "up", "right"],
+    "7": ["left", "down", "right", "center", "left", "up", "right"]
+  },
+  "shapes": ["#FF4FA3", "#FFD23F", "#3DDCFF", "#7CFF6B", "#FF8A3D", "#C46BFF"]
+}

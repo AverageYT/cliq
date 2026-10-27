@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# player data (songs you import, settings, scores, cache)
+/songs/*
+!/songs/.gitkeep
+/user/

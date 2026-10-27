@@ -1,0 +1,11 @@
+# Game
+pygame-ce>=2.4          # drop-in "import pygame"; classic pygame>=2.1 also works
+numpy>=1.24
+
+# Importing songs
+imageio-ffmpeg>=0.4.9   # bundled ffmpeg binary (a system ffmpeg is used if present)
+yt-dlp[default]         # YouTube/web audio; [default] includes YouTube's challenge solver
+deno                    # JavaScript runtime yt-dlp needs for YouTube
+
+# Development
+pytest>=7
