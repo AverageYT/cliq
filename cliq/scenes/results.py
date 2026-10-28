@@ -14,8 +14,9 @@ from .base import Scene
 
 
 class ResultsScene(Scene):
-    def __init__(self, app, song, chart, difficulty: str, summary: dict, modifier_ids, mods, errors=()):
+    def __init__(self, app, song, chart, difficulty: str, summary: dict, modifier_ids, mods, errors=(), run=None):
         super().__init__(app)
+        self.run = run
         self.song = song
         self.chart = chart
         self.difficulty = difficulty
@@ -59,7 +60,8 @@ class ResultsScene(Scene):
     def retry(self) -> None:
         from .gameplay import GameplayScene
 
-        self.app.replace(GameplayScene(self.app, self.song, self.chart, self.difficulty, self.modifier_ids))
+        self.app.replace(GameplayScene(self.app, self.song, self.chart, self.difficulty, self.modifier_ids,
+                                       run=self.run))
 
     def done(self) -> None:
         self.app.pop(select=self.song.id)

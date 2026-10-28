@@ -11,7 +11,9 @@ A chart file (``songs/<id>/charts/<difficulty>.json``) looks like::
 
 Each note is ``[time_seconds, lane, hold_duration?, kind?]``. Dict notes
 (``{"t": .., "l": .., "d": .., "k": ..}``) are accepted too. ``kind`` is
-"tap" by default and is reserved for future note types (mines, shields...).
+"tap" by default; game modes add their own (taiko "big"/"roll", shield
+"reverse", path "critical"/"mash"). ``mode`` says which game mode the chart is
+for ("keys" when missing).
 """
 
 from __future__ import annotations
@@ -67,6 +69,7 @@ class Chart:
     difficulty: str = "normal"
     notes: list[Note] = field(default_factory=list)
     meta: dict = field(default_factory=dict)
+    mode: str = "keys"            # which game mode plays this chart (see cliq/modes)
 
     def sort(self) -> "Chart":
         self.notes.sort(key=lambda n: (n.time, n.lane))
@@ -101,7 +104,7 @@ class Chart:
     # ------------------------------------------------------------ io
     def to_json(self) -> dict:
         self.sort()
-        return {"format": CHART_FORMAT, "version": CHART_VERSION, "lanes": self.lanes,
+        return {"format": CHART_FORMAT, "version": CHART_VERSION, "mode": self.mode, "lanes": self.lanes,
                 "difficulty": self.difficulty, "meta": self.meta,
                 "notes": [n.to_json() for n in self.notes]}
 
@@ -117,7 +120,7 @@ class Chart:
             if 0 <= note.lane < lanes:
                 notes.append(note)
         return cls(lanes=lanes, difficulty=str(data.get("difficulty", "normal")), notes=notes,
-                   meta=dict(data.get("meta", {}))).sort()
+                   meta=dict(data.get("meta", {})), mode=str(data.get("mode", "keys"))).sort()
 
     def save(self, path: Path) -> None:
         save_json(path, self.to_json(), indent=None)

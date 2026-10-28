@@ -76,6 +76,37 @@ class Song:
     def load_chart(self, difficulty: str) -> Chart | None:
         return Chart.load(self.chart_path(difficulty))
 
+    def difficulties_for(self, mode_id: str) -> list[str]:
+        """Difficulties playable in a mode. Non-keys charts are generated on demand."""
+        from ..modes import split_stem
+
+        if mode_id == "keys":
+            return [n for n in self.chart_names() if split_stem(n)[0] == "keys"]
+        have = [split_stem(n)[1] for n in self.chart_names() if split_stem(n)[0] == mode_id]
+        extra = [d for d in load_profiles() if d not in have] if self.analysis_path.exists() else []
+        order = {k: p.order for k, p in load_profiles().items()}
+        return sorted(set(have) | set(extra), key=lambda d: (order.get(d, 100), d))
+
+    def chart_for(self, mode_id: str, difficulty: str, settings=None, create: bool = True) -> Chart | None:
+        """Load the chart for (mode, difficulty), auto-generating and saving it if missing."""
+        from ..modes import get_mode
+
+        mode = get_mode(mode_id)
+        stem = mode.chart_stem(difficulty)
+        chart = self.load_chart(stem)
+        if chart is None and create:
+            analysis = self.load_analysis()
+            if analysis is None:
+                return None
+            from ..settings import Settings
+
+            chart = mode.generate(analysis, difficulty, self.grid, settings or Settings(),
+                                  seed=sum(map(ord, self.id)) % 10007)
+            self.save_chart(chart, stem)
+        if chart is not None and chart.mode != mode.id and mode.id != "keys":
+            chart.mode = mode.id
+        return chart
+
     def save_chart(self, chart: Chart, name: str | None = None) -> None:
         name = name or chart.difficulty
         chart.difficulty = name

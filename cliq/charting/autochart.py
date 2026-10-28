@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import bisect
 import math
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -61,6 +62,35 @@ def _det_noise(*keys: float) -> float:
     return (x % 10007) / 10007.0
 
 
+@dataclass
+class Plan:
+    """When notes happen (parallel lists, sorted by time) - shared by every game mode."""
+
+    times: list[float]
+    onset: list[int]          # index into ``onsets`` (-1 = grid fill without an onset)
+    rel: list[float]          # salience relative to the surrounding music
+    level: list[int]          # metrical level (0 measure ... 4 triplet)
+    duration: list[float]     # > 0 for sustained notes
+    ramp: list[float]
+    start: float
+    end: float
+    onsets: object
+    profile: DifficultyProfile
+    grid: BeatGrid
+
+    def quarter(self, t: float) -> int:
+        return int(min(3, max(0, (t - self.start) / max(1e-6, self.end - self.start) * 4)))
+
+    def intensity(self, i: int) -> float:
+        """Salience scaled by how far into the song we are."""
+        return self.rel[i] * self.ramp[self.quarter(self.times[i])]
+
+
+def chart_meta(profile: DifficultyProfile, grid: BeatGrid, seed: int, **extra) -> dict:
+    return {"generator": f"auto v{GENERATOR_VERSION}", "profile": profile.id, "seed": seed,
+            "bpm": round(grid.bpm, 3), "health_drain": profile.health_drain, **extra}
+
+
 class _Loudness:
     def __init__(self, rms: np.ndarray, fps: float):
         self.fps = fps
@@ -91,24 +121,28 @@ class _Loudness:
         return body / (head + 1e-9)
 
 
-def generate_chart(analysis, difficulty: str | DifficultyProfile = "normal", lanes: int = 4,
-                   grid: BeatGrid | None = None, seed: int = 0, **overrides) -> Chart:
+def resolve_profile(difficulty, **overrides) -> DifficultyProfile:
     profile = difficulty if isinstance(difficulty, DifficultyProfile) else get_profile(difficulty)
-    if overrides:
-        profile = profile.with_overrides(**overrides)
-    grid = grid or analysis.grid()
-    lanes = max(1, int(lanes))
-    meta = {"generator": f"auto v{GENERATOR_VERSION}", "profile": profile.id, "seed": seed,
-            "bpm": round(grid.bpm, 3), "health_drain": profile.health_drain}
-    chart = Chart(lanes=lanes, difficulty=profile.id, notes=[], meta=meta)
+    return profile.with_overrides(**overrides) if overrides else profile
 
+
+def plan_chart(analysis, profile: DifficultyProfile, grid: BeatGrid, salience=None, density: float = 1.0,
+               min_gap_s: float = 0.0) -> "Plan | None":
+    """Steps 1-5: choose *when* notes happen (on the grid) and which are holds.
+
+    ``salience(onsets)`` may return a per-onset weight (e.g. favour drums for
+    taiko); ``density`` scales the note budget; ``min_gap_s`` adds a floor on
+    spacing (e.g. time to turn a shield). Game modes then decide *what* each
+    note is.
+    """
     ons = analysis.onsets
     if len(ons) == 0:
-        return chart
+        return None
     loud = _Loudness(analysis.rms, analysis.fps)
     strong_mask = ons.strength >= 0.08
     if not strong_mask.any():
-        return chart
+        return None
+    weight = np.ones(len(ons)) if salience is None else np.asarray(salience(ons), dtype=np.float64)
     active_times = ons.times[strong_mask & loud.active(ons.times)]
     if len(active_times) == 0:
         active_times = ons.times[strong_mask]
@@ -125,7 +159,7 @@ def generate_chart(analysis, difficulty: str | DifficultyProfile = "normal", lan
     keep = (times >= start_t - 0.06) & (times <= end_t + 0.06)
     beats, times = beats[keep], times[keep]
     if len(times) == 0:
-        return chart
+        return None
     levels = np.array([_level_of(round(b - math.floor(b), 6)) for b in beats])
     for i, b in enumerate(beats):
         if levels[i] == 1 and grid.is_measure_start(int(round(b))):
@@ -148,8 +182,8 @@ def generate_chart(analysis, difficulty: str | DifficultyProfile = "normal", lan
                 best_j, best_d = j, abs(times[j] - t)
         if best_j < 0 or best_d > min(0.06, 0.45 * spacing[best_j]):
             continue
-        if ons.strength[k] > slot_strength[best_j]:
-            slot_strength[best_j] = ons.strength[k]
+        if ons.strength[k] * weight[k] > slot_strength[best_j]:
+            slot_strength[best_j] = ons.strength[k] * weight[k]
             slot_onset[best_j] = k
 
     # ------------------------------------------------------------ 3. salience
@@ -195,13 +229,13 @@ def generate_chart(analysis, difficulty: str | DifficultyProfile = "normal", lan
         m_end = grid.time_at((m + 1) * grid.beats_per_measure + grid.downbeat)
         q = quarter((m_start + m_end) / 2)
         loudness = 0.55 + 0.45 * float(np.mean(energy[idx]))
-        budget = max(1, int(round(profile.nps * ramp[q] * loudness * (m_end - m_start))))
+        budget = max(1, int(round(profile.nps * density * ramp[q] * loudness * (m_end - m_start))))
         taken = 0
         for j in idx[np.argsort(-score[idx], kind="stable")]:
             if taken >= budget:
                 break
             t = times[j]
-            gap = max(profile.min_gap_beats * grid.beat_length_at(t), profile.min_gap_s) * ramp_gap[q] - 1e-4
+            gap = max(profile.min_gap_beats * grid.beat_length_at(t), profile.min_gap_s, min_gap_s) * ramp_gap[q] - 1e-4
             p = bisect.bisect_left(chosen_times, t)
             if p > 0 and t - chosen_times[p - 1] < gap:
                 continue
@@ -211,7 +245,7 @@ def generate_chart(analysis, difficulty: str | DifficultyProfile = "normal", lan
             chosen.insert(p, int(j))
             taken += 1
     if not chosen:
-        return chart
+        return None
     chosen_arr = np.array(chosen)
 
     # ------------------------------------------------------------ 5. holds
@@ -239,6 +273,24 @@ def generate_chart(analysis, difficulty: str | DifficultyProfile = "normal", lan
         if end - t >= 0.45 * bl:
             durations[i] = end - t
 
+    return Plan(times=[float(times[j]) for j in chosen_arr], onset=[int(slot_onset[j]) for j in chosen_arr],
+                rel=[float(rel[j]) for j in chosen_arr], level=[int(levels[j]) for j in chosen_arr],
+                duration=[float(d) for d in durations], ramp=ramp, start=start_t, end=end_t, onsets=ons,
+                profile=profile, grid=grid)
+
+
+def generate_chart(analysis, difficulty: str | DifficultyProfile = "normal", lanes: int = 4,
+                   grid: BeatGrid | None = None, seed: int = 0, **overrides) -> Chart:
+    """The classic lane chart (Keys mode): plan the rhythm, then assign lanes and chords."""
+    profile = resolve_profile(difficulty, **overrides)
+    grid = grid or analysis.grid()
+    lanes = max(1, int(lanes))
+    chart = Chart(lanes=lanes, difficulty=profile.id, notes=[], meta=chart_meta(profile, grid, seed))
+    plan = plan_chart(analysis, profile, grid)
+    if plan is None:
+        return chart
+    ons, ramp, quarter = plan.onsets, plan.ramp, plan.quarter
+
     # ------------------------------------------------------------ 6. lanes
     half = lanes // 2
     def hand(lane: int) -> int:
@@ -251,9 +303,8 @@ def generate_chart(analysis, difficulty: str | DifficultyProfile = "normal", lan
     lane_last_time = np.full(lanes, -10.0)
     recent: list[tuple[float, int]] = []
     rel_of = {}
-    for i, j in enumerate(chosen_arr):
-        t = float(times[j])
-        k = int(slot_onset[j])
+    for i, t in enumerate(plan.times):
+        k = plan.onset[i]
         tone = float(ons.tone[k]) if k >= 0 else last_tone
         low = float(ons.low[k]) if k >= 0 else 0.0
         mid = float(ons.mid[k]) if k >= 0 else 0.0
@@ -292,12 +343,12 @@ def generate_chart(analysis, difficulty: str | DifficultyProfile = "normal", lan
             c += 0.2 * usage[lane]
             if gap < 0.2 and hand(lane) == hand(last_lane) and hand(lane) != 2:
                 c += 0.6
-            c += 0.35 * _det_noise(seed, round(tone or 0), levels[j], lane, i % 7)
+            c += 0.35 * _det_noise(seed, round(tone or 0), plan.level[i], lane, i % 7)
             costs[lane] = c
         lane = int(np.argmin(costs))
-        notes.append(Note(t, lane, float(durations[i])))
-        rel_of[len(notes) - 1] = (float(rel[j]), int(levels[j]))
-        lane_last_time[lane] = t + durations[i]
+        notes.append(Note(t, lane, plan.duration[i]))
+        rel_of[len(notes) - 1] = (plan.rel[i], plan.level[i])
+        lane_last_time[lane] = t + plan.duration[i]
         last_lane, last_time = lane, t
         if tone is not None:
             last_tone = tone

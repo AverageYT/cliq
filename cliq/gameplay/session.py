@@ -175,12 +175,13 @@ class PlaySession:
         self._acc_sum += value
         self._acc_n += 1
 
-    def _hit(self, ns: NoteState, judgement: Judgement, error: float) -> None:
+    def _hit(self, ns: NoteState, judgement: Judgement, error: float, record_error: bool = True) -> None:
         ns.judged, ns.result, ns.error = True, judgement.id, error
         self._judged += 1
         self.counts[judgement.id] = self.counts.get(judgement.id, 0) + 1
         self._add_accuracy(judgement.accuracy)
-        self.errors.append(error)
+        if record_error:
+            self.errors.append(error)
         self.score += int(round(judgement.score * self.rules.score_multiplier))
         if judgement.breaks_combo:
             self._break_combo(ns)

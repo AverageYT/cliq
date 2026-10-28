@@ -18,12 +18,11 @@ import pygame
 
 from ..audio.conductor import Conductor
 from ..events import EventBus
-from ..gameplay.modifiers import Modifier, prepare_play
-from ..gameplay.session import PlaySession
+from ..gameplay.modifiers import prepare_play
+from ..modes import get_mode
 from ..render import vector as V
 from ..render.background import Background
 from ..render.fx import ease_out_back
-from ..render.playfield import Playfield
 from ..render.widgets import Button, ButtonGroup, panel
 from ..util import darken, hex_to_rgb, lighten, mix
 from .base import Scene
@@ -49,8 +48,10 @@ class GameplayScene(Scene):
     menu_music = False
 
     def __init__(self, app, song, chart, difficulty: str, modifier_ids=(), start_time: float | None = None,
-                 from_editor: bool = False):
+                 from_editor: bool = False, run=None):
         super().__init__(app)
+        self.run = run                      # playlist / roguelike run this play belongs to (or None)
+        self.mode = get_mode(chart.mode)
         self.song = song
         self.source_chart = chart
         self.difficulty = difficulty
@@ -63,25 +64,19 @@ class GameplayScene(Scene):
                                                          settings.no_fail, seed=seed,
                                                          anti_spam=settings.anti_spam)
         self.bus = EventBus()
-        self.session = PlaySession(play_chart, self.rules, self.mods, self.bus,
-                                   start_time=start_time if start_time is not None else -math.inf)
+        self.session = self.mode.session(play_chart, self.rules, self.mods, self.bus,
+                                         start_time if start_time is not None else -math.inf)
         self.lanes = play_chart.lanes
         self.grid = song.grid
-        self.key_lanes = lane_key_map(settings, self.lanes)
+        self.key_lanes = self.mode.key_map(settings, play_chart)
         w, h = self.size
-        self.playfield = Playfield(self.theme, settings, self.lanes, self.ui.scale, self.size,
-                                   speed_scale=self.rules.scroll_speed_scale)
-        self.rules.anti_spam_horizon = self.playfield.ahead   # only notes you can already see
-        self.times = [n.time for n in self.session.notes]
-        self.max_hold = max((n.end - n.time for n in self.session.notes), default=0.0)
-        alpha_mods = [m for m in self.mods if type(m).note_alpha is not Modifier.note_alpha]
-        self.alpha_fn = (lambda p: min(m.note_alpha(p) for m in alpha_mods)) if alpha_mods else None
+        self.view = self.mode.view(self)
+        self.rules.anti_spam_horizon = self.view.ahead   # only notes you can already see
         self.conductor = Conductor(app.audio, offset_ms=settings.audio_offset_ms)
         self.background = Background(self.size, self.theme, self.ui.scale, seed=len(song.id),
                                      dim=settings.background_dim)
         self.hitsounds = settings.hitsounds
         self.hit_volume = settings.hitsound_volume * settings.sfx_volume
-        self.down = settings.scroll_direction != "up"
 
         # HUD state
         self.popups = {j.id: self.fonts.render(j.label, "display", 40, j.color, outline=5, shadow=4)
@@ -106,7 +101,7 @@ class GameplayScene(Scene):
 
         self.bus.on("judgement", self._on_judgement)
         self.bus.on("hold_drop", self._on_hold_drop)
-        self.bus.on("hold_complete", lambda **kw: self.playfield.on_hit(kw["note"].lane, "great", None))
+        self.bus.on("hold_complete", lambda **kw: self.view.on_judgement(kw["note"], self.rules.judgements[1], 0.0))
         self.bus.on("fail", self._on_fail)
         self.bus.on("finish", self._on_finish)
         self.bus.on("combo_milestone", lambda **kw: self.app.sfx("combo", 0.5))
@@ -153,14 +148,14 @@ class GameplayScene(Scene):
     def _on_judgement(self, session, note, judgement, error) -> None:
         self.popup = self.popups.get(judgement.id)
         self.popup_age = 0.0
+        self.view.on_judgement(note, judgement, error)
         if judgement.is_miss:
             self.early_late = None
         else:
-            self.playfield.on_hit(note.lane, judgement.id, judgement.color)
             self.combo_bump = 1.0
             self.error_ticks.append([error, 0.0, judgement.color])
             self.error_ticks = self.error_ticks[-40:]
-            if judgement.id != self.rules.judgements[0].id and error is not None:
+            if judgement.id != self.rules.judgements[0].id and error:
                 self.early_late = ("EARLY", self.theme.c("accent3")) if error < 0 else ("LATE", self.theme.c("accent5"))
             else:
                 self.early_late = None
@@ -204,7 +199,7 @@ class GameplayScene(Scene):
 
     def restart(self) -> None:
         self.app.replace(GameplayScene(self.app, self.song, self.source_chart, self.difficulty, self.modifier_ids,
-                                       self.start_time, self.from_editor))
+                                       self.start_time, self.from_editor, run=self.run))
 
     def quit(self) -> None:
         self.conductor.stop()
@@ -221,7 +216,7 @@ class GameplayScene(Scene):
         from .results import ResultsScene
 
         self.app.replace(ResultsScene(self.app, self.song, self.source_chart, self.difficulty, summary,
-                                      self.modifier_ids, self.mods, errors=list(self.session.errors)))
+                                      self.modifier_ids, self.mods, errors=list(self.session.errors), run=self.run))
 
     # ------------------------------------------------------------ events
     def handle_event(self, e) -> None:
@@ -268,7 +263,7 @@ class GameplayScene(Scene):
         t = self.conductor.time
         if self.end_timer is None or not self.session.failed:
             self.session.update(t)
-        self.playfield.update(dt, self.session.pressed)
+        self.view.update(dt, t)
         self.background.update(dt, float(self.grid.beat_at(t)))
         self.popup_age += dt
         self.combo_bump = max(0.0, self.combo_bump - dt * 6)
@@ -282,7 +277,7 @@ class GameplayScene(Scene):
             if self.hold_tick > 0.07:
                 self.hold_tick = 0.0
                 for lane in self.session.active_holds:
-                    self.playfield.on_hold_tick(lane)
+                    self.view.on_hold_tick(lane)
         while self.countdown_next < len(self.countdown_beats) and t >= self.countdown_beats[self.countdown_next]:
             self.app.sfx("tick_accent" if self.countdown_next == 3 else "tick", 0.6)
             self.countdown_next += 1
@@ -298,14 +293,8 @@ class GameplayScene(Scene):
     # ------------------------------------------------------------ drawing
     def draw(self, surf) -> None:
         t = self.conductor.time
-        pf = self.playfield
         self.background.draw(surf)
-        pf.draw_panel(surf)
-        pf.draw_beams(surf, self.session.pressed)
-        if pf.show_beat_lines:
-            pf.draw_grid(surf, t, self.grid)
-        pf.draw_chart(surf, t, self.session.notes, self.times, self.session.pressed, self.max_hold, self.alpha_fn)
-        pf.draw_effects(surf)
+        self.view.draw(surf, t)
         self._draw_hud(surf, t)
         self._draw_countdown(surf, t)
         if self.end_banner is not None:
@@ -329,11 +318,11 @@ class GameplayScene(Scene):
 
     def _draw_hud(self, surf, t: float) -> None:
         w, h = self.size
-        pf = self.playfield
+        view = self.view
         theme = self.theme
         session = self.session
-        cx = pf.x0 + pf.width / 2
-        mid_y = h * (0.42 if self.down else 0.58)
+        cx = view.center_x
+        mid_y = view.judge_y
         shake = math.sin(time.perf_counter() * 60) * self.s(10) * self.fail_shake
 
         # judgement popup + early/late
@@ -364,10 +353,9 @@ class GameplayScene(Scene):
             self.fonts.draw(surf, "combo", (cx, mid_y + self.s(92)), "bold", 17, theme.c("text_dim"),
                             anchor="center", outline=2)
 
-        # timing bar, tucked just outside the receptors
-        if self.app.settings.show_hit_error:
-            gap = pf.lane_w * 0.5 + self.s(24)
-            self._draw_error_bar(surf, cx, pf.receptor_y + (gap if self.down else -gap))
+        # timing bar (where the mode wants it)
+        if self.app.settings.show_hit_error and view.error_y is not None:
+            self._draw_error_bar(surf, cx, view.error_y)
 
         # score / accuracy (top right)
         right = w - self.s(28)
@@ -389,7 +377,7 @@ class GameplayScene(Scene):
                 y += self.s(28)
 
         # song info (top left), never running into the lanes
-        info_w = max(120, min(340, (pf.x0 - self.s(46)) / self.ui.scale))
+        info_w = max(120, min(340, (view.info_limit - self.s(26)) / self.ui.scale))
         self.fonts.draw(surf, self.song.title, (self.s(26), self.s(20)), "bold", 26, (255, 255, 255), outline=3,
                         max_width=info_w)
         self.fonts.draw(surf, self.song.artist, (self.s(26), self.s(56)), "ui", 19, theme.c("text_dim"), outline=2,
@@ -397,7 +385,10 @@ class GameplayScene(Scene):
         x = self.s(26)
         if not hasattr(self, "_pills"):
             self._pills = []
-            for label, color in [(self.difficulty.title(), theme.c("accent2"))] + \
+            label = self.difficulty.replace("-", " ").title()
+            if self.mode.id != "keys" and not label.lower().startswith(self.mode.id):
+                label = f"{self.mode.name} {label}"
+            for label, color in [(label, theme.c("accent2"))] + \
                                 [(m.name, hex_to_rgb(m.color)) for m in self.mods]:
                 img = self.fonts.render(label, "bold", 16, theme.c("ink"))
                 box = V.rounded_rect((img.get_width() + self.s(18), self.s(28)), self.s(14), color, theme.c("ink"),
@@ -415,7 +406,7 @@ class GameplayScene(Scene):
         pygame.draw.rect(surf, theme.c("accent2"), (0, 0, int(w * progress), self.s(7)))
 
         # health (right of the playfield)
-        hx = pf.x0 + pf.width + self.s(38)
+        hx = view.health_x
         bar = pygame.Rect(0, 0, self.s(22), int(h * 0.52))
         bar.midtop = (hx, int(h * 0.24))
         pygame.draw.rect(surf, theme.c("ink"), bar.inflate(self.s(8), self.s(8)), border_radius=self.s(15))
@@ -436,7 +427,7 @@ class GameplayScene(Scene):
         surf.blit(heart, heart.get_rect(center=(hx, bar.top - self.s(18))))
 
         if self.rules.autoplay:
-            self.fonts.draw(surf, "AUTOPLAY", (cx, h - self.s(20) if not self.down else self.s(28)), "display", 26,
+            self.fonts.draw(surf, "AUTOPLAY", (cx, view.autoplay_y), "display", 26,
                             theme.c("accent3"), anchor="center", outline=4)
 
     def _draw_error_bar(self, surf, cx: float, y: float) -> None:
@@ -471,8 +462,7 @@ class GameplayScene(Scene):
                 img = pygame.transform.smoothscale(img, (int(img.get_width() * scale), int(img.get_height() * scale)))
                 if age > 0.3:
                     img.set_alpha(int(255 * (1 - (age - 0.3) / 0.2)))
-                pf = self.playfield
-                surf.blit(img, img.get_rect(center=(pf.x0 + pf.width / 2, self.size[1] * 0.4)))
+                surf.blit(img, img.get_rect(center=(self.view.center_x, self.view.countdown_y)))
 
     def _draw_banner(self, surf) -> None:
         text, color = self.end_banner
