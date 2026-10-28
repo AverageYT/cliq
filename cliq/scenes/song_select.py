@@ -256,6 +256,27 @@ class SongSelectScene(Scene):
         self._remember()
         self.app.push(PlaylistsScene(self.app))
 
+    def add_to_playlist(self) -> None:
+        """Add the highlighted song (current mode + difficulty) to the last used playlist."""
+        from ..library.playlists import PlaylistBook
+
+        song, diff = self.song, self.difficulty
+        if song is None or diff is None:
+            return
+        book = PlaylistBook()
+        pl = book.get(self.app.settings.last_playlist) or (book.playlists[-1] if book.playlists else None)
+        if pl is None:
+            pl = book.create("My playlist")
+        if pl.contains(song.id, self.mode_id, diff):
+            self.app.toasts.show(f"Already in {pl.name}")
+            return
+        pl.add(song.id, self.mode_id, diff)
+        book.save()
+        self.app.settings.last_playlist = pl.id
+        self.app.settings.save()
+        self.app.toasts.show(f"Added to {pl.name} ({len(pl.entries)} songs) - P to open playlists",
+                             self.theme.c("good"))
+
     def cycle_background(self) -> None:
         song = self.song
         if song is None:
@@ -310,6 +331,9 @@ class SongSelectScene(Scene):
             return
         self.app.menu_music.stop()
         self.app.library.delete(song.id)
+        from ..library.playlists import PlaylistBook
+
+        PlaylistBook().forget_song(song.id)
         self.app.toasts.show(f"Removed \"{song.title}\"")
         self._confirm_delete = 0.0
         self.reload(None)
@@ -354,6 +378,8 @@ class SongSelectScene(Scene):
                 self.add_song()
             elif k == pygame.K_p:
                 self.playlists()
+            elif k in (pygame.K_EQUALS, pygame.K_PLUS, pygame.K_KP_PLUS):
+                self.add_to_playlist()
             elif k == pygame.K_b:
                 self.cycle_background()
             elif k == pygame.K_r:
@@ -487,7 +513,8 @@ class SongSelectScene(Scene):
         theme = self.theme
         self.fonts.draw(surf, "Pick a song", (self.s(40), self.s(20)), "display", 46, (255, 255, 255),
                         outline=5, shadow=6)
-        hint = "Enter play  -  Tab mode  -  E map  -  R re-chart  -  B background  -  P playlists  -  I add  -  Esc back"
+        hint = ("Enter play  -  Tab mode  -  E map  -  R re-chart  -  B background  -  P playlists (+ add)  -  "
+                "I add  -  Esc back")
         self.fonts.draw(surf, hint, (w - self.s(36), self.s(40)), "ui", 16, theme.c("text_dim"), anchor="midright",
                         outline=2, max_width=860)
         self._draw_list(surf)

@@ -82,6 +82,7 @@ class Settings:
     last_song: str | None = None
     last_difficulty: str | None = None
     last_mode: str = "keys"
+    last_playlist: str | None = None
 
     # ------------------------------------------------------------------ io
     @classmethod

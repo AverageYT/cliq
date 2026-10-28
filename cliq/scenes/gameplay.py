@@ -408,8 +408,11 @@ class GameplayScene(Scene):
             label = self.difficulty.replace("-", " ").title()
             if self.mode.id != "keys" and not label.lower().startswith(self.mode.id):
                 label = f"{self.mode.name} {label}"
-            for label, color in [(label, theme.c("accent2"))] + \
-                                [(m.name, hex_to_rgb(m.color)) for m in self.mods]:
+            pills = [(label, theme.c("accent2"))]
+            if self.run is not None:
+                n, total = self.run.position
+                pills.append((f"{self.run.name} {n}/{total}", theme.c("accent3")))
+            for label, color in pills + [(m.name, hex_to_rgb(m.color)) for m in self.mods]:
                 img = self.fonts.render(label, "bold", 16, theme.c("ink"))
                 box = V.rounded_rect((img.get_width() + self.s(18), self.s(28)), self.s(14), color, theme.c("ink"),
                                      outline=max(2, self.s(2.5)))

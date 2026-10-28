@@ -36,7 +36,10 @@ class ResultsScene(Scene):
         bh = self.s(62)
         self.retry_btn = Button(self.ui, (w - self.s(40) - self.s(460), h - self.s(92), self.s(210), bh), "Retry",
                                 self.retry, color=theme.c("accent3"), sublabel="R")
-        self.next_btn = Button(self.ui, (w - self.s(40) - self.s(236), h - self.s(92), self.s(236), bh), "Continue",
+        label = "Continue"
+        if run is not None:
+            label = "Next song" if run.index + 1 < len(run.stages) else "Finish"
+        self.next_btn = Button(self.ui, (w - self.s(40) - self.s(236), h - self.s(92), self.s(236), bh), label,
                                self.done, color=theme.c("accent"), sublabel="Enter")
         self.buttons = [self.next_btn, self.retry_btn]
         mean = float(self.errors_ms.mean()) if len(self.errors_ms) else 0.0
@@ -53,6 +56,8 @@ class ResultsScene(Scene):
         ranked = all(getattr(m, "ranked", True) for m in self.mods)
         if ranked and not self.summary["failed"]:
             self.new_best = self.app.scores.record(self.song.id, self.difficulty, self.summary)
+        if self.run is not None:
+            self.run.record(self.summary)
         self.app.sfx("ui_select")
         self.app.menu_music.play(self.song)
 
@@ -64,6 +69,14 @@ class ResultsScene(Scene):
                                        run=self.run))
 
     def done(self) -> None:
+        if self.run is not None:
+            from .run_flow import RunSummaryScene, launch_stage
+
+            if self.run.advance():
+                launch_stage(self.app, self.run, replace=True)
+            else:
+                self.app.replace(RunSummaryScene(self.app, self.run))
+            return
         self.app.pop(select=self.song.id)
 
     def apply_offset(self) -> None:
@@ -101,7 +114,10 @@ class ResultsScene(Scene):
         s = self.summary
         self.fonts.draw(surf, self.song.title, (self.s(40), self.s(22)), "display", 40, (255, 255, 255), outline=5,
                         shadow=5, max_width=820)
-        sub = f"{self.song.artist}  -  {self.difficulty.title()}"
+        sub = f"{self.song.artist}  -  {self.difficulty.replace('-', ' ').title()}"
+        if self.run is not None:
+            n, total = self.run.position
+            sub += f"  -  {self.run.name} {n}/{total}"
         if self.mods:
             sub += "  -  " + ", ".join(m.name for m in self.mods)
         self.fonts.draw(surf, sub, (self.s(42), self.s(72)), "bold", 20, theme.c("text_dim"), outline=2,

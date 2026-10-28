@@ -37,9 +37,13 @@ def app(tmp_path_factory):
 
 
 def frames(app, seconds=0.2, fps=240):
+    # Wall-clock time (audio, key holds), but never stop halfway through a scene fade: fades
+    # advance by frame steps, so on a busy machine a short wait could leave one pending.
     end = time.perf_counter() + seconds
-    while time.perf_counter() < end:
+    n = 0
+    while time.perf_counter() < end or ((app._pending is not None or app._fading_in) and n < 2000):
         app._frame(1 / fps)
+        n += 1
         time.sleep(1 / fps)
 
 
@@ -310,3 +314,51 @@ def test_calibration_measures_taps(app):
     assert abs(scene.median_ms) < 60
     key(app, pygame.K_ESCAPE)
     frames(app, 0.3)
+
+
+def test_playlist_plays_songs_back_to_back(app):
+    from cliq.library.playlists import PlaylistBook
+    from cliq.scenes.playlists import PlaylistsScene
+
+    short = [s for s in app.library.scan() if s.duration < 15][:2]
+    assert len(short) == 2
+    app.settings.enabled_modifiers = ["autoplay"]
+    app.settings.last_mode, app.settings.last_difficulty = "keys", "easy"
+    app.push(PlaylistsScene(app), instant=True)
+    frames(app, 0.2)
+    scene = app.scene
+    key(app, pygame.K_n)                                  # new playlist, straight into renaming
+    assert scene.renaming
+    scene.name_input.set_text("Road trip")
+    key(app, pygame.K_RETURN)
+    assert scene.playlist.name == "Road trip" and not scene.renaming
+    key(app, pygame.K_a)                                  # song picker
+    songs = app.library.songs
+    for s in short:
+        scene.picker["index"] = songs.index(s)
+        key(app, pygame.K_RETURN)
+    key(app, pygame.K_ESCAPE)
+    assert [e.song_id for e in scene.playlist.entries] == [s.id for s in short]
+    assert PlaylistBook().get(scene.playlist.id).name == "Road trip"   # saved
+    key(app, pygame.K_RETURN)                             # play in order
+    frames(app, 0.5)
+    titles = []
+    deadline = time.perf_counter() + 90
+    while scene_name(app) != "RunSummaryScene" and time.perf_counter() < deadline:
+        if scene_name(app) == "GameplayScene" and (not titles or titles[-1] != app.scene.song.title):
+            titles.append(app.scene.song.title)
+            assert app.scene.run is not None
+        if scene_name(app) == "ResultsScene":
+            frames(app, 0.3)
+            key(app, pygame.K_RETURN)                     # next song / finish
+        frames(app, 0.1)
+    assert scene_name(app) == "RunSummaryScene"
+    assert titles == [s.title for s in short]
+    run = app.scene.run
+    assert run.totals()["played"] == 2 and run.totals()["cleared"] == 2
+    key(app, pygame.K_RETURN)
+    frames(app, 0.5)
+    assert scene_name(app) == "PlaylistsScene"
+    app.settings.enabled_modifiers = []
+    key(app, pygame.K_ESCAPE)
+    frames(app, 0.4)

@@ -29,9 +29,12 @@ Cliq is split so that **music analysis**, **chart data**, **game rules** and **r
 | `charting/` | `BeatGrid` (beat ↔ seconds, constant or variable), `Chart`/`Note` + JSON format, difficulty profiles, `autochart.generate_chart()`. | The charter takes `**overrides` for any profile field (items can make a run denser, sparser, add triplets...). |
 | `audio/` | `engine.py`: mixer setup and SFX. `conductor.py`: the song clock. `ffmpeg.py`, `youtube.py`: decoding/downloading. `synth.py`: procedural sounds and the demo song. | The conductor is the only source of song time. |
 | `gameplay/` | `rules.py` (windows, scoring, health), `session.py` (`PlaySession`: judging, holds, combo, health, events), `modifiers.py` (registry, built-ins, mod loader). | **No pygame imports** in `session`/`rules`: unit-testable and reusable by other modes. |
-| `library/` | Song folders, import jobs (threaded), scores. | |
+| `modes/` | `GameMode` (chart generator, session, key map, view) and the four built-in modes: `keys`, `taiko`, `shield`, `path`. | A mode's chart is a normal `Chart` with `mode` set; files are `charts/<mode>-<difficulty>.json`. |
+| `library/` | Song folders, import jobs (threaded), scores, playlists. | |
+| `runs.py` | `Run` / `PlaylistRun`: songs back to back with state, events and per-stage results. | The roguelike's run type subclasses `Run`. |
 | `render/` | Procedural vector sprites (`vector.py`), note skins, playfield, particles, background, widgets, fonts. | Everything is pre-rendered once and blitted per frame. |
-| `scenes/` | Title, song select, import, gameplay, results, editor, settings, calibration. | Each scene is a small class on the app's scene stack. |
+| `scenes/` | Title, song select (+ import popup), import, gameplay, results, editor, settings, calibration, playlists, run summary. | Each scene is a small class on the app's scene stack. |
+| `render/video.py` | Song backgrounds: ffmpeg decodes the video (scaled, cropped, dimmed) on a worker thread; the game blits the frame for the current song time. | Seeks restart ffmpeg at the new time. |
 
 ## The song clock (`audio/conductor.py`)
 
@@ -78,27 +81,39 @@ class Vampire(Modifier):
             session.heal(0.01)
 ```
 
-## Adding a game mode (phase two)
+## Game modes (`cliq/modes/`)
 
-Undertale-style shielding, taiko and similar modes should reuse:
+A mode is a `GameMode` subclass registered with `register_mode`:
 
-* `SongAnalysis`:
-  * `beat_times` / `grid()` for the musical grid;
-  * `onsets` with `low`/`mid`/`high` band strengths and `tone` (pitch), e.g. kicks → taiko "don", hats → "ka", melody → shield directions;
-  * `rms` for intensity.
-* `BeatGrid`, for quantising whatever the mode spawns.
-* `Rules` + `PlaySession`, or a sibling session class, emitting the same events, so modifiers and HUD effects work unchanged.
-* `Conductor` for timing, and `Playfield`-style renderers for drawing.
+| Method | Job |
+|---|---|
+| `generate(analysis, difficulty, grid, settings, seed)` | Build a `Chart` from the song analysis. Most modes call `autochart.plan_chart()` - it decides *when* notes happen (salience, density budget, the four-quarter ramp) - and then decide *what* each note is. |
+| `session(chart, rules, modifiers, bus, start_time)` | Judging. `PlaySession` or a subclass (Taiko adds rolls and big-note bonuses, Shield judges by facing, Path judges criticals and mashes). |
+| `key_map(settings, chart)` | Keyboard key → lane. |
+| `view(scene)` | A `ModeView` that draws the playfield and tells the HUD where to put the judgement, countdown and timing bar. |
+| `chart_stem(difficulty)` | Chart file name, e.g. `taiko-hard`. |
 
-A mode then needs a pattern generator (like `autochart.py`) and a scene. Charts already carry a `kind` field per note ("tap" today) for mixing note types such as mines or shield arrows.
+Notes carry a `kind` (`tap`, `big`, `roll`, `reverse`, `critical`, `mash`...) so a mode can mix note types. Because every mode emits the same events, modifiers and HUD effects work in all of them.
+
+## Runs (`cliq/runs.py`)
+
+Playing a playlist creates a `PlaylistRun`. `GameplayScene` and `ResultsScene` carry the run along; Results records each song's summary into the run and *Next song* starts the next stage (`scenes/run_flow.launch_stage`). The end shows `RunSummaryScene`.
+
+A `Run` has everything a roguelike run needs to hook into:
+
+* `stages` - a plain list, so a run can grow or branch;
+* `state` - a free-form dict for items, currency, carried health;
+* `bus` - `run_start`, `stage_start`, `stage_end`, `run_end` events;
+* `modifiers_for(stage)` - which modifiers a song is played with;
+* `on_stage_end(stage)` - e.g. end the run on a fail (`continue_on_fail = False`).
 
 ## Planned phase-two shape
 
 ```
-Run (seed, health, currency, modifiers/items)
+RoguelikeRun(Run) (seed, health, currency, modifiers/items in state)
   └─ Map of nodes ─▶ Song node: pick song + mode, generate chart with run overrides
                     Shop node: buy/upgrade items (Modifier instances with params)
                     Event node: curses/blessings (more modifiers)
 ```
 
-The pieces already exist: deterministic chart generation from a seed, profile overrides for difficulty scaling, modifier instances with state, and per-play summaries from `PlaySession.summary()` to award rewards.
+The pieces already exist: runs with stages and events, deterministic chart generation from a seed, profile overrides for difficulty scaling, four game modes, modifier instances with state, and per-play summaries from `PlaySession.summary()` to award rewards.

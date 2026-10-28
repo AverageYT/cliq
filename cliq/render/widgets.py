@@ -103,7 +103,7 @@ class Button:
         self._cache: dict = {}
 
     def _face(self, state: str) -> pygame.Surface:
-        key = (state, self.rect.size, self.label, self.sublabel, self.color)
+        key = (state, self.rect.size, self.label, self.sublabel, self.color, self.enabled)
         img = self._cache.get(key)
         if img is None:
             ink = self.ui.theme.c("ink")

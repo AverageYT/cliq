@@ -20,10 +20,11 @@ class TitleScene(Scene):
         w, h = self.size
         bw, bh, gap = self.s(330), self.s(60), self.s(14)
         x = w // 2 - bw // 2
-        y0 = int(h * 0.44)
+        y0 = int(h * 0.415)
         theme = self.theme
         items = [
             ("Play", self.play, theme.c("accent")),
+            ("Playlists", self.playlists, theme.c("accent4")),
             ("Add a song", self.import_song, theme.c("accent3")),
             ("Settings", self.settings, theme.c("accent5")),
             ("Quit", self.app.quit, theme.c("panel_light")),
@@ -53,6 +54,11 @@ class TitleScene(Scene):
         from .song_select import SongSelectScene
 
         self.app.push(SongSelectScene(self.app))
+
+    def playlists(self) -> None:
+        from .playlists import PlaylistsScene
+
+        self.app.push(PlaylistsScene(self.app))
 
     def import_song(self) -> None:
         from .import_song import ImportScene
