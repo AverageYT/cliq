@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pygame
 
-from ..library.importer import ImportJob
-from ..render.widgets import Button, FileDialog, TextInput, draw_bar, get_clipboard, panel
+from ..library.importer import BACKGROUND_LABELS, ImportJob
+from ..render.widgets import Button, FileDialog, Segmented, TextInput, draw_bar, get_clipboard, panel
 from .base import Scene
 
 
@@ -45,6 +45,9 @@ class ImportScene(Scene):
         self.buttons = [self.paste_btn, self.go_btn, self.browse_btn, self.file_go, self.back_btn]
         self.cancel_btn = Button(self.ui, (w // 2 - self.s(110), self.s(520), self.s(220), self.s(58)), "Cancel",
                                  self.cancel, color=theme.c("bad"), size=26)
+        self.choice = Segmented(self.ui, (w // 2 - self.s(300), top + ch + self.s(58), self.s(600), self.s(42)),
+                                list(BACKGROUND_LABELS.items()), app.settings.import_background,
+                                on_change=self._set_background, size=18)
         self.job: ImportJob | None = None
         self.dialog: FileDialog | None = None
         self.error: str | None = None
@@ -53,6 +56,10 @@ class ImportScene(Scene):
         self.big_panel = panel((self.s(760), self.s(330)), self.ui)
 
     # ------------------------------------------------------------ actions
+    def _set_background(self, value: str) -> None:
+        self.app.settings.import_background = value
+        self.app.settings.save()
+
     def paste(self) -> None:
         text = get_clipboard().strip()
         if text:
@@ -76,7 +83,8 @@ class ImportScene(Scene):
         self.error = None
         self.shown_progress = 0.0
         self.app.menu_music.stop()
-        self.job = ImportJob(source, self.app.library, lanes=self.app.settings.lane_count)
+        self.job = ImportJob(source, self.app.library, lanes=self.app.settings.lane_count,
+                             background=self.app.settings.import_background)
         self.job.start()
 
     def cancel(self) -> None:
@@ -117,6 +125,8 @@ class ImportScene(Scene):
             return
         if e.type == pygame.KEYDOWN and e.key == pygame.K_ESCAPE:
             self.back()
+            return
+        if self.choice.handle_event(e):
             return
         for b in self.buttons:
             if b.handle_event(e):
@@ -180,13 +190,16 @@ class ImportScene(Scene):
                         outline=2)
         for b in self.buttons:
             b.draw(surf)
+        self.fonts.draw(surf, "Behind the notes:", (self.choice.rect.x - self.s(14), self.choice.rect.centery), "bold",
+                        20, (255, 255, 255), anchor="midright", outline=2)
+        self.choice.draw(surf)
         if self.dialog is not None:
-            self.fonts.draw(surf, "Waiting for the file picker...", (w // 2, self.card1.bottom + self.s(46)), "bold",
+            self.fonts.draw(surf, "Waiting for the file picker...", (w // 2, self.card1.bottom + self.s(28)), "bold",
                             22, (255, 255, 255), anchor="center", outline=3)
         if self.error:
-            self.fonts.draw(surf, self.error, (w // 2, self.card1.bottom + self.s(46)), "bold", 22,
+            self.fonts.draw(surf, self.error, (w // 2, self.card1.bottom + self.s(28)), "bold", 22,
                             theme.c("bad"), anchor="center", outline=3, max_width=1150)
-        lines = ("We find the BPM and beat, then chart Easy to Expert for you.",
+        lines = ("We find the BPM and beat, then chart Easy to Master for you.",
                  "Tweak any chart or map your own in the editor (E in song select).")
         for i, line in enumerate(lines):
             self.fonts.draw(surf, line, (w // 2 + self.s(90), h - self.s(84) + i * self.s(28)), "ui", 19,

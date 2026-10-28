@@ -274,6 +274,77 @@ class Pill:
         surf.blit(img, (self.rect.x, self.rect.y - (self.ui.s(2) if self.hover else 0)))
 
 
+class Segmented:
+    """A row of mutually exclusive options (e.g. background: Video / Thumbnail / Nothing)."""
+
+    def __init__(self, ui: UI, rect, options: list[tuple[str, str]], value: str, on_change=None, size: int = 16,
+                 color=None):
+        self.ui = ui
+        self.rect = pygame.Rect(rect)
+        self.options = list(options)
+        self.value = value if any(v == value for v, _ in options) else options[0][0]
+        self.on_change = on_change
+        self.size = size
+        self.color = color or ui.theme.c("accent2")
+        self.hover = -1
+        self._faces: dict = {}
+
+    def _segments(self) -> list[pygame.Rect]:
+        n = len(self.options)
+        pad = self.ui.s(4)
+        inner = self.rect.inflate(-2 * pad, -2 * pad)
+        w = inner.width / n
+        return [pygame.Rect(round(inner.x + i * w), inner.y, round(w), inner.height) for i in range(n)]
+
+    def set(self, value: str) -> None:
+        if value != self.value:
+            self.value = value
+            self.ui.sound("ui_move")
+            if self.on_change:
+                self.on_change(value)
+
+    def step(self, delta: int) -> None:
+        values = [v for v, _ in self.options]
+        i = values.index(self.value) if self.value in values else 0
+        self.set(values[(i + delta) % len(values)])
+
+    def handle_event(self, e) -> bool:
+        if e.type == pygame.MOUSEMOTION:
+            self.hover = next((i for i, r in enumerate(self._segments()) if r.collidepoint(e.pos)), -1)
+        if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1 and self.rect.collidepoint(e.pos):
+            for i, r in enumerate(self._segments()):
+                if r.collidepoint(e.pos):
+                    self.set(self.options[i][0])
+            return True
+        return False
+
+    def draw(self, surf) -> None:
+        ink = self.ui.theme.c("ink")
+        key = ("track", self.rect.size)
+        track = self._faces.get(key)
+        if track is None:
+            track = V.rounded_rect(self.rect.size, self.rect.height / 2, darken(self.ui.theme.c("panel"), 0.2), ink,
+                                   outline=max(2, self.ui.s(2.5)))
+            self._faces[key] = track
+        surf.blit(track, self.rect)
+        for i, ((value, label), r) in enumerate(zip(self.options, self._segments())):
+            active = value == self.value
+            key = (value, active, i == self.hover, r.size)
+            img = self._faces.get(key)
+            if img is None:
+                if active:
+                    img = V.rounded_rect(r.size, r.height / 2, self.color, ink, outline=max(2, self.ui.s(2)))
+                else:
+                    img = pygame.Surface(r.size, pygame.SRCALPHA)
+                    if i == self.hover:
+                        pygame.draw.rect(img, (255, 255, 255, 28), img.get_rect(), border_radius=r.height // 2)
+                txt = self.ui.fonts.render(label, "bold", self.size, ink if active else (225, 218, 255),
+                                           max_width=r.width / self.ui.scale - 6)
+                img.blit(txt, txt.get_rect(center=(r.width / 2, r.height / 2)))
+                self._faces[key] = img
+            surf.blit(img, r)
+
+
 class TextInput:
     def __init__(self, ui: UI, rect, placeholder: str = "", on_submit=None, size: int = 22):
         self.ui = ui

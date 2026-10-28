@@ -148,6 +148,106 @@ def test_editor_edit_undo_save(app):
     assert scene_name(app) != "EditorScene"
 
 
+def test_editor_selection_clipboard_overlap_and_drain(app):
+    from cliq.charting.chart import Note
+    from cliq.scenes.editor import EditorScene
+
+    song = app.library.songs[0]
+    app.push(EditorScene(app, song, "clip"), instant=True)
+    frames(app, 0.2)
+    ed = app.scene
+    ed.help = False
+    ctrl = pygame.KMOD_CTRL
+    ed.seek(ed.grid.time_at(8))
+    for lane_key in (pygame.K_d, pygame.K_f):
+        key(app, lane_key)
+        key(app, pygame.K_UP)
+    assert len(ed.notes) == 2
+    key(app, pygame.K_a, mod=ctrl)
+    key(app, pygame.K_c, mod=ctrl)
+    ed.seek(ed.grid.time_at(16))
+    key(app, pygame.K_v, mod=ctrl)
+    assert len(ed.notes) == 4 and len(ed.selection) == 2          # pasted notes are selected
+    pasted = ed.selected()
+    assert ed.grid.beat_at(pasted[0].time) == pytest.approx(16, abs=1e-3)
+    key(app, pygame.K_m, mod=ctrl)                                  # mirror lanes 0,1 -> 3,2
+    assert sorted(n.lane for n in ed.selected()) == [2, 3]
+    key(app, pygame.K_UP, mod=pygame.KMOD_ALT)                      # nudge the selection
+    assert ed.grid.beat_at(ed.selected()[0].time) != pytest.approx(16, abs=1e-3)
+    key(app, pygame.K_x, mod=ctrl)
+    assert len(ed.notes) == 2 and not ed.selection
+    # overlapping notes: a hold over existing taps keeps them; an exact duplicate toggles off
+    t8 = ed.grid.time_at(8)
+    ed.apply([Note(round(t8, 4), 0, round(ed.grid.time_at(10) - t8, 4))], [])
+    assert len(ed.notes) == 3
+    ed.toggle_note(0, ed.grid.time_at(8.25))                        # 1/16 after the hold head
+    assert len(ed.notes) == 4
+    ed.toggle_note(0, ed.grid.time_at(8.25))
+    assert len(ed.notes) == 3
+    # health drain is stored in the chart
+    default = ed.drain
+    key(app, pygame.K_PERIOD)
+    key(app, pygame.K_PERIOD)
+    assert ed.drain == pytest.approx(default + 0.2)
+    key(app, pygame.K_s, mod=ctrl)
+    assert song.load_chart("clip").meta["health_drain"] == pytest.approx(default + 0.2)
+    key(app, pygame.K_COMMA, mod=pygame.KMOD_SHIFT)
+    assert "health_drain" not in ed.meta
+    ed.dirty = False
+    key(app, pygame.K_ESCAPE)
+    frames(app, 0.4)
+    assert scene_name(app) != "EditorScene"
+
+
+def test_song_select_popup_modes_and_video_background(app, tmp_path):
+    from cliq.scenes.song_select import SongSelectScene
+
+    exe = ffmpeg.find_ffmpeg()
+    beat = 60 / 120
+    y = np.zeros(int(9 * synth.SR))
+    k = synth.kick()
+    for i in range(16):
+        j = int((0.5 + i * beat) * synth.SR)
+        y[j:j + len(k)] += k[: len(y) - j]
+    wav = tmp_path / "beat.wav"
+    synth.write_wav(wav, y * 0.8)
+    clip = tmp_path / "Clip With Video.mp4"
+    import subprocess
+    subprocess.run([exe, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30", "-i", str(wav),
+                    "-shortest", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                    str(clip)], check=True)
+    app.push(SongSelectScene(app), instant=True)
+    frames(app, 0.2)
+    scene = app.scene
+    app.settings.import_background = "video720"
+    key(app, pygame.K_i)
+    assert scene.popup.open
+    scene.popup.start(str(clip))
+    deadline = time.perf_counter() + 60
+    while scene.popup.job is not None and time.perf_counter() < deadline:
+        frames(app, 0.1)
+    assert scene.song.title == "Clip With Video" and not scene.popup.open
+    assert scene.song.background_kind() == "video"
+    key(app, pygame.K_TAB)                                          # keys -> taiko
+    assert scene.mode_id == "taiko" and scene.difficulty
+    key(app, pygame.K_RETURN)
+    assert scene.entering is not None                               # zooming into the cover
+    deadline = time.perf_counter() + 5
+    while scene_name(app) == "SongSelectScene" and time.perf_counter() < deadline:
+        frames(app, 0.05)
+    assert scene_name(app) == "GameplayScene" and app.scene.mode.id == "taiko"
+    frames(app, 1.5)
+    assert app.scene.video is not None and app.scene.video.ready
+    assert scene.song.load_chart("taiko-" + scene.difficulty) is not None   # generated on demand
+    app.scene.quit()
+    frames(app, 0.5)
+    for _ in range(3):
+        key(app, pygame.K_TAB)                                      # back to keys
+    assert scene.mode_id == "keys"
+    key(app, pygame.K_ESCAPE)
+    frames(app, 0.4)
+
+
 def test_settings_change_and_rebind(app):
     from cliq.scenes.settings_menu import SettingsScene
 

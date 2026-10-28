@@ -113,3 +113,34 @@ def read_tags(path: str | Path) -> dict[str, str]:
     if "artist" not in tags and "album_artist" in tags:
         tags["artist"] = tags["album_artist"]
     return tags
+
+
+def extract_video(src: str | Path, dst_stem: str | Path) -> Path | None:
+    """Copy the first real video stream (not embedded cover art) of ``src``, without audio.
+
+    No re-encode: the container is chosen to fit whatever codec is inside.
+    Returns None if the file has no video.
+    """
+    dst_stem = Path(dst_stem)
+    for ext in (".mp4", ".mkv"):
+        dst = dst_stem.with_suffix(ext)
+        proc = _run(["-v", "error", "-y", "-i", str(src), "-map", "0:V:0", "-an", "-sn", "-c:v", "copy", str(dst)],
+                    capture_stdout=False)
+        if proc.returncode == 0 and dst.exists() and dst.stat().st_size > 1024:
+            return dst
+        dst.unlink(missing_ok=True)
+    return None
+
+
+def video_size(path: str | Path) -> tuple[int, int] | None:
+    """(width, height) of the first video stream, from ffmpeg's banner."""
+    try:
+        proc = _run(["-i", str(path)], capture_stdout=False)
+    except FFmpegError:
+        return None
+    for line in proc.stderr.decode("utf-8", "replace").splitlines():
+        if "Video:" in line and "attached pic" not in line:
+            m = re.search(r"\b(\d{2,5})x(\d{2,5})\b", line)
+            if m:
+                return int(m.group(1)), int(m.group(2))
+    return None

@@ -191,3 +191,62 @@ def download_audio(url: str, out_dir: Path, progress=None, cancelled=None) -> Do
                           artist=artist, video_id=str(info.get("id") or ""), url=str(info.get("webpage_url") or url),
                           duration=float(info.get("duration") or 0.0), thumbnail=thumb,
                           extractor=str(info.get("extractor_key") or info.get("extractor") or "url"))
+
+
+def download_video(url: str, out_dir: Path, max_height: int = 720, progress=None, cancelled=None) -> Path:
+    """Download a video-only stream (no audio) up to ``max_height`` for the gameplay background.
+
+    Prefers H.264/mp4 (cheapest to decode), then any codec, then a combined
+    stream when the site has no separate video track.
+    """
+    try:
+        import yt_dlp  # type: ignore
+    except ImportError as exc:
+        raise DownloadFailed("Video backgrounds need yt-dlp. Run: pip install \"yt-dlp[default]\"") from exc
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    h = int(max_height)
+
+    def hook(d: dict) -> None:
+        if cancelled and cancelled():
+            raise DownloadCancelled()
+        if progress and d.get("status") == "downloading":
+            total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+            if total:
+                progress(min(1.0, (d.get("downloaded_bytes") or 0) / total))
+
+    opts = {
+        "format": (f"bestvideo[height<={h}][vcodec^=avc1]/bestvideo[height<={h}][ext=mp4]/bestvideo[height<={h}]"
+                   f"/best[height<={h}]/best"),
+        "outtmpl": {"default": str(out_dir / "video.%(ext)s")},
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+        "progress_hooks": [hook],
+        "logger": _SilentLogger(),
+        "socket_timeout": 20,
+        "retries": 3,
+    }
+    runtimes = js_runtimes()
+    if runtimes:
+        opts["js_runtimes"] = runtimes
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(normalize_url(url), download=True)
+    except DownloadCancelled:
+        raise
+    except Exception as exc:
+        if "DownloadCancelled" in repr(exc):
+            raise DownloadCancelled() from exc
+        raise DownloadFailed(friendly_error(exc)) from exc
+    if info and info.get("entries"):
+        info = next(e for e in info["entries"] if e)
+    for dl in (info or {}).get("requested_downloads") or []:
+        if dl.get("filepath") and Path(dl["filepath"]).exists():
+            return Path(dl["filepath"])
+    found = [p for p in out_dir.glob("video.*") if p.suffix.lower() != ".part"]
+    if not found:
+        raise DownloadFailed("No video stream was downloaded.")
+    return found[0]

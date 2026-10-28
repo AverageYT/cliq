@@ -4,6 +4,11 @@ Main idea: press Play and tap the lane keys in time with the music. Taps become
 notes, long presses become holds, everything snaps to the beat grid (choose the
 snap with Left/Right). While paused you can click to add/remove notes, drag to
 draw holds, and fine-tune the grid (BPM, offset, bar lines, tap tempo).
+
+Notes may overlap (a tap inside a hold, chords, close stacks): only an exact
+duplicate - same lane, same snapped time - is skipped. Everyday shortcuts work
+on a selection: Ctrl+A, Ctrl/Shift+click, Shift+drag box, Ctrl+C/X/V/D,
+Delete, Alt+Up/Down to nudge, Ctrl+M to mirror.
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ from ..charting.autochart import generate_chart
 from ..charting.beatgrid import BeatGrid
 from ..charting.chart import Chart, Note
 from ..charting.profiles import load_profiles
+from ..gameplay.modifiers import chart_health_drain
 from ..render.background import Background
 from ..render.playfield import Playfield
 from ..render.widgets import Button, draw_bar, panel
@@ -30,25 +36,36 @@ SNAP_NAMES = {1: "1/4", 2: "1/8", 3: "1/12", 4: "1/16", 6: "1/24", 8: "1/32", 12
 
 HELP = [
     ("Space / Enter", "play / pause"),
-    ("lane keys", "record notes while playing; toggle at playhead when paused"),
+    ("lane keys", "record while playing / toggle when paused"),
     ("hold a lane key", "record a hold note"),
     ("Left / Right", "snap finer / coarser"),
     ("Up / Down / wheel", "move one snap step (Ctrl+wheel zoom)"),
     ("PgUp / PgDn", "move one measure"),
-    ("mouse", "click add/remove, drag = hold, right-click delete"),
+    ("click / drag", "add or remove a note / draw a hold"),
+    ("right-click", "delete a note"),
     ("R", "record on/off"),
     ("M / N", "metronome / note ticks"),
     ("- / =", "BPM down/up (Shift x10, Ctrl x0.1)"),
     ("[ / ]", "grid earlier/later 5 ms (Shift 1 ms)"),
     ("T", "tap tempo (tap 8+ times on the beat)"),
     ("B", "bar line starts here"),
-    ("Delete", "clear this measure (Shift: clear all)"),
     ("G", "auto-chart this difficulty again"),
+    (", / .", "health drain down/up (Shift+, default)"),
+    ("Ctrl+A", "select all notes"),
+    ("Ctrl/Shift+click", "add or remove a note from the selection"),
+    ("Shift+drag", "box-select notes"),
+    ("Ctrl+C / X / V", "copy / cut / paste at the playhead"),
+    ("Ctrl+D", "duplicate the selection right after itself"),
+    ("Alt+Up / Down", "move the selection one snap step"),
+    ("Ctrl+M", "mirror the selection's lanes"),
+    ("Delete", "delete selection, else clear measure (Shift: all)"),
+    ("Esc", "clear the selection, then leave"),
     ("Ctrl+Z / Ctrl+Y", "undo / redo"),
     ("P / F5", "playtest from here"),
     ("Ctrl+S", "save"),
     ("H", "hide this help"),
 ]
+DRAIN_MIN, DRAIN_MAX = 0.2, 4.0
 
 
 class EditorScene(Scene):
@@ -95,12 +112,14 @@ class EditorScene(Scene):
         self.taps: list[float] = []
         self.confirm: tuple[str, float] | None = None
         self.drag: dict | None = None
+        self.box: dict | None = None
+        self.selection: dict[int, Note] = {}
         self.hover: tuple[int, float] | None = None
         self._last_t = 0.0
         self._playtest_from = 0.0
         self.panel_rect = pygame.Rect(int(w * 0.6), self.s(24), w - int(w * 0.6) - self.s(24), h - self.s(48))
         self.panel_img = panel(self.panel_rect.size, self.ui)
-        self.help_img = panel((self.s(760), self.s(600)), self.ui, alpha=255)
+        self.help_img = panel((self.s(1180), self.s(560)), self.ui, alpha=255)
         self.help_dim = pygame.Surface(self.size, pygame.SRCALPHA)
         self.help_dim.fill((*darken(self.theme.c("ink"), 0.4), 150))
         self.timeline = pygame.Rect(self.panel_rect.x + self.s(24), self.panel_rect.bottom - self.s(58),
@@ -114,7 +133,7 @@ class EditorScene(Scene):
         bw = (r.width - self.s(24) * 2 - self.s(12)) // 2
         bh = self.s(48)
         x1, x2 = r.x + self.s(24), r.x + self.s(24) + bw + self.s(12)
-        y = r.y + self.s(318)
+        y = r.y + self.s(328)
         specs = [
             ("Play / Pause", self.toggle_play, theme.c("accent"), x1, y),
             ("Playtest  P", self.playtest, theme.c("accent3"), x2, y),
@@ -164,6 +183,9 @@ class EditorScene(Scene):
     def _reindex(self) -> None:
         self.notes.sort(key=lambda n: (n.time, n.lane))
         self._times = [n.time for n in self.notes]
+        if self.selection:
+            alive = {id(n) for n in self.notes}
+            self.selection = {k: n for k, n in self.selection.items() if k in alive}
 
     def _note_near(self, lane: int, t: float, tol: float) -> Note | None:
         lo = bisect.bisect_left(self._times, t - tol)
@@ -204,16 +226,15 @@ class EditorScene(Scene):
             self.app.toasts.show("Redo", seconds=0.8)
 
     def toggle_note(self, lane: int, t: float) -> None:
-        existing = self._note_near(lane, t, self._tol())
+        existing = self._duplicate(lane, t)
         if existing is not None:
             self.apply([], [existing])
         else:
-            self.apply([Note(round(t, 4), lane)], self._overlapping(lane, t, t))
+            self.apply([Note(round(t, 4), lane)], [])
 
-    def _overlapping(self, lane: int, start: float, end: float) -> list[Note]:
-        """Notes in ``lane`` that a new note spanning [start, end] would collide with."""
-        tol = self._tol()
-        return [n for n in self.notes if n.lane == lane and n.time <= end + tol and n.end >= start - tol]
+    def _duplicate(self, lane: int, t: float) -> Note | None:
+        """A note at exactly this lane and (snapped) time. Anything else may overlap freely."""
+        return self._note_near(lane, t, 0.0015)
 
     def _confirm(self, action: str, message: str) -> bool:
         now = time.perf_counter()
@@ -223,6 +244,126 @@ class EditorScene(Scene):
         self.confirm = (action, now)
         self.app.toasts.show(message, self.theme.c("accent5"))
         return False
+
+    # ------------------------------------------------------------ selection & clipboard
+    def select_notes(self, notes, add: bool = False) -> None:
+        if not add:
+            self.selection = {}
+        for n in notes:
+            self.selection[id(n)] = n
+
+    def toggle_selected(self, note: Note) -> None:
+        if id(note) in self.selection:
+            del self.selection[id(note)]
+        else:
+            self.selection[id(note)] = note
+
+    def selected(self) -> list[Note]:
+        return sorted(self.selection.values(), key=lambda n: (n.time, n.lane))
+
+    def select_all(self) -> None:
+        self.select_notes(self.notes)
+        self.app.toasts.show(f"Selected all {len(self.notes)} notes", seconds=1.0)
+
+    def copy(self, cut: bool = False) -> None:
+        notes = self.selected()
+        if not notes:
+            self.app.toasts.show("Nothing selected - Ctrl+A, Shift+drag or Ctrl+click notes", seconds=1.6)
+            return
+        b0 = self.grid.beat_at(notes[0].time)
+        # stored in beats, so a pattern pastes correctly into a song with another tempo
+        self.app.editor_clipboard = [
+            (self.grid.beat_at(n.time) - b0, n.lane,
+             self.grid.beat_at(n.end) - self.grid.beat_at(n.time) if n.is_hold else 0.0, n.kind)
+            for n in notes]
+        if cut:
+            self.apply([], notes)
+            self.app.toasts.show(f"Cut {len(notes)} notes", seconds=1.0)
+        else:
+            self.app.toasts.show(f"Copied {len(notes)} notes", seconds=1.0)
+
+    def paste(self, at: float | None = None) -> list[Note]:
+        clip = getattr(self.app, "editor_clipboard", None)
+        if not clip:
+            self.app.toasts.show("Clipboard is empty - copy some notes first (Ctrl+C)", seconds=1.6)
+            return []
+        t0 = self.grid.snap(self.now if at is None else at, self.division)
+        b0 = self.grid.beat_at(t0)
+        added = []
+        for db, lane, dur_beats, kind in clip:
+            t = self.grid.time_at(b0 + db)
+            if t < 0 or t > self.song.duration:
+                continue
+            lane = int(lane) % self.lanes
+            if self._duplicate(lane, t) is not None:
+                continue
+            dur = self.grid.time_at(b0 + db + dur_beats) - t if dur_beats > 0 else 0.0
+            added.append(Note(round(t, 4), lane, round(dur, 4), kind))
+        self.apply(added, [])
+        self.select_notes(added)
+        self.app.toasts.show(f"Pasted {len(added)} notes", seconds=1.0)
+        return added
+
+    def duplicate(self) -> None:
+        notes = self.selected()
+        if not notes:
+            return
+        self.copy()
+        end = max(n.end for n in notes)
+        step = self.grid.beat_length_at(max(0.0, end)) / self.division
+        self.paste(at=self.grid.snap(end + step * 0.5, self.division) if end > notes[0].time else end + step)
+
+    def delete_selection(self) -> None:
+        notes = self.selected()
+        self.apply([], notes)
+        self.app.toasts.show(f"Deleted {len(notes)} notes", seconds=1.0)
+
+    def move_selection(self, steps: int) -> None:
+        notes = self.selected()
+        if not notes:
+            return
+        div = self.division
+
+        def shift(t: float) -> float:   # in grid steps, so rounded note times can't stick to a line
+            return self.grid.time_at(round(self.grid.beat_at(t) * div + steps) / div)
+
+        moved = []
+        for n in notes:
+            t = shift(n.time)
+            end = shift(n.end) if n.is_hold else t
+            moved.append(Note(round(t, 4), n.lane, round(max(0.0, end - t), 4), n.kind))
+        if any(m.time < 0 or m.time > self.song.duration for m in moved):
+            return
+        self.apply(moved, notes)
+        self.select_notes(moved)
+
+    def mirror_selection(self) -> None:
+        notes = self.selected()
+        if not notes:
+            return
+        flipped = [Note(n.time, self.lanes - 1 - n.lane, n.duration, n.kind) for n in notes]
+        self.apply(flipped, notes)
+        self.select_notes(flipped)
+
+    # ------------------------------------------------------------ health drain
+    def default_drain(self) -> float:
+        return chart_health_drain(Chart(lanes=self.lanes, difficulty=self.chart_name,
+                                        meta={k: v for k, v in self.meta.items() if k != "health_drain"}))
+
+    @property
+    def drain(self) -> float:
+        return chart_health_drain(Chart(lanes=self.lanes, difficulty=self.chart_name, meta=self.meta))
+
+    def nudge_drain(self, delta: float | None) -> None:
+        if delta is None:
+            self.meta.pop("health_drain", None)
+            msg = f"Health drain: {self.drain:.1f}x (difficulty default)"
+        else:
+            value = round(max(DRAIN_MIN, min(DRAIN_MAX, self.drain + delta)), 2)
+            self.meta["health_drain"] = value
+            msg = f"Health drain: {value:.1f}x"
+        self.dirty = True
+        self.app.toasts.show(msg, seconds=1.2)
 
     # ------------------------------------------------------------ transport
     def toggle_play(self) -> None:
@@ -249,8 +390,8 @@ class EditorScene(Scene):
         self._flush_pending()
         self.conductor.pause()
         self._playtest_from = self.now
-        chart = Chart(lanes=self.lanes, difficulty=self.chart_name, notes=[Note(n.time, n.lane, n.duration, n.kind)
-                                                                          for n in self.notes])
+        chart = Chart(lanes=self.lanes, difficulty=self.chart_name, meta=dict(self.meta),
+                      notes=[Note(n.time, n.lane, n.duration, n.kind) for n in self.notes])
         if not chart.notes:
             self.app.toasts.show("Add some notes first", self.theme.c("bad"))
             return
@@ -272,10 +413,13 @@ class EditorScene(Scene):
         s = self.grid.snap(start, self.division)
         e = self.grid.snap(release_t, self.division)
         hold = (release_t - start) >= max(0.22, beat * 0.45) and e - s >= beat / self.division * 0.99
-        if self._note_near(lane, s, self._tol()) is not None:
-            return  # already there (overdubbing an existing chart)
+        dup = self._duplicate(lane, s)
         note = Note(round(s, 4), lane, round(e - s, 4) if hold else 0.0)
-        self.apply([note], self._overlapping(lane, note.time, note.end))
+        if dup is not None:
+            if hold and not dup.is_hold:
+                self.apply([note], [dup])        # recording over a tap with a hold upgrades it
+            return                               # same note already there (overdubbing)
+        self.apply([note], [])
 
     # ------------------------------------------------------------ grid edits
     def set_grid(self, grid: BeatGrid, message: str) -> None:
@@ -395,7 +539,13 @@ class EditorScene(Scene):
         elif e.type == pygame.MOUSEBUTTONUP:
             for b in self.buttons:
                 b.handle_event(e)
-            if e.button == 1 and self.drag is not None:
+            if e.button == 1 and self.box is not None:
+                picked = self._box_notes()
+                self.select_notes(picked, add=self.box["add"])
+                self.box = None
+                if picked:
+                    self.app.toasts.show(f"Selected {len(self.selection)} notes", seconds=0.8)
+            elif e.button == 1 and self.drag is not None:
                 self._mouse_up()
         elif e.type == pygame.WINDOWFOCUSLOST and self.conductor.running:
             self.toggle_play()
@@ -420,11 +570,32 @@ class EditorScene(Scene):
             else:
                 self.toggle_note(lane, self.grid.snap(self.now, self.division))
             return
+        alt = mods & pygame.KMOD_ALT
         if k == pygame.K_ESCAPE:
             if self.help:
                 self.help = False
+            elif self.selection:
+                self.selection = {}
             else:
                 self.exit()
+        elif ctrl and k == pygame.K_a:
+            self.select_all()
+        elif ctrl and k == pygame.K_c:
+            self.copy()
+        elif ctrl and k == pygame.K_x:
+            self.copy(cut=True)
+        elif ctrl and k == pygame.K_v:
+            self._flush_pending()
+            self.paste()
+        elif ctrl and k == pygame.K_d:
+            self.duplicate()
+        elif ctrl and k == pygame.K_m:
+            self.mirror_selection()
+        elif alt and k in (pygame.K_UP, pygame.K_DOWN) and self.selection:
+            forward = (k == pygame.K_UP) == self.playfield.down
+            self.move_selection(1 if forward else -1)
+        elif k in (pygame.K_COMMA, pygame.K_PERIOD):
+            self.nudge_drain(None if (shift and k == pygame.K_COMMA) else (-0.1 if k == pygame.K_COMMA else 0.1))
         elif k in self.play_keys:
             self.toggle_play()
         elif ctrl and k == pygame.K_s:
@@ -472,8 +643,12 @@ class EditorScene(Scene):
             self.set_bar()
         elif k == pygame.K_g:
             self.autochart()
-        elif k == pygame.K_DELETE:
-            if shift:
+        elif k in (pygame.K_DELETE, pygame.K_BACKSPACE):
+            if self.selection:
+                self.delete_selection()
+            elif k == pygame.K_BACKSPACE:
+                pass
+            elif shift:
                 self.clear_all()
             else:
                 self.clear_measure()
@@ -494,13 +669,38 @@ class EditorScene(Scene):
         self.hover = self._mouse_pos_note(pos)
         if self.drag is not None and self.hover is not None:
             self.drag["end"] = max(self.drag["start"], self.hover[1])
+        if self.box is not None:
+            self.box["pos"] = pos
+
+    def _box_notes(self) -> list[Note]:
+        pf = self.playfield
+        (x0, y0), (x1, y1) = self.box["origin"], self.box["pos"]
+        lanes = [lane for lane in range(self.lanes)
+                 if min(x0, x1) - pf.lane_w / 2 <= pf.lane_x(lane) <= max(x0, x1) + pf.lane_w / 2]
+        ta = pf.time_at_y(y0, self.box["now"])
+        tb = pf.time_at_y(y1, self.now)
+        lo, hi = min(ta, tb), max(ta, tb)
+        return [n for n in self.notes if n.lane in lanes and lo - 1e-4 <= n.time <= hi + 1e-4]
 
     def _mouse_down(self, e) -> None:
+        mods = pygame.key.get_mods()
+        if e.button == 1 and mods & pygame.KMOD_SHIFT and self.playfield.lane_at_x(e.pos[0]) is not None:
+            self.box = {"origin": e.pos, "pos": e.pos, "now": self.now,
+                        "add": bool(mods & (pygame.KMOD_CTRL | pygame.KMOD_META))}
+            return
         spot = self._mouse_pos_note(e.pos)
         if spot is None:
             return
         lane, t = spot
         existing = self._note_near(lane, t, self._tol())
+        if e.button == 1 and mods & (pygame.KMOD_CTRL | pygame.KMOD_META):
+            if existing is not None:
+                self.toggle_selected(existing)
+            return
+        if e.button == 1 and self.selection:
+            self.selection = {}
+            if existing is not None:
+                return   # first click just drops the selection
         if e.button == 3:
             hit = existing or next((n for n in self.notes if n.lane == lane and n.time <= t <= n.end), None)
             if hit is not None:
@@ -517,7 +717,7 @@ class EditorScene(Scene):
             return
         length = d["end"] - d["start"]
         note = Note(round(d["start"], 4), d["lane"], round(length, 4) if length > 1e-3 else 0.0)
-        self.apply([note], self._overlapping(note.lane, note.time, note.end))
+        self.apply([note], [])
 
     # ------------------------------------------------------------ update
     def update(self, dt: float) -> None:
@@ -556,9 +756,20 @@ class EditorScene(Scene):
         hover_note = None
         if self.hover is not None and not self.conductor.running:
             hover_note = self._note_near(self.hover[0], self.hover[1], self._tol())
+        sel = self.selection
+        highlight = None
+        if hover_note is not None or sel:
+            highlight = lambda n: n is hover_note or id(n) in sel  # noqa: E731
         pf.draw_chart(surf, t, self.notes, self._times, self.pressed,
-                      max((n.duration for n in self.notes), default=0.0),
-                      highlight=(lambda n: n is hover_note) if hover_note else None)
+                      max((n.duration for n in self.notes), default=0.0), highlight=highlight)
+        if self.box is not None:
+            (x0, y0), (x1, y1) = self.box["origin"], self.box["pos"]
+            y0 = pf.y_at(pf.time_at_y(y0, self.box["now"]) - t)
+            rect = pygame.Rect(min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
+            shade = pygame.Surface(rect.size, pygame.SRCALPHA)
+            shade.fill((*theme.c("accent2"), 50))
+            surf.blit(shade, rect)
+            pygame.draw.rect(surf, theme.c("accent2"), rect, max(1, self.s(2)))
         self._draw_ghosts(surf, t)
         pf.draw_effects(surf)
         # judgement line marker
@@ -642,13 +853,17 @@ class EditorScene(Scene):
             ("Tempo", f"{self.grid.bpm:.2f} BPM" + ("  (variable)" if self.grid.variable else "")),
             ("Grid offset", f"{self.grid.time_at(0) * 1000:.0f} ms"),
             ("Snap", f"{SNAP_NAMES.get(self.division, self.division)}  ({self.division}/beat)"),
-            ("Notes", f"{len(self.notes)}  ({sum(1 for n in self.notes if n.is_hold)} holds)  {self.lanes}K"),
+            ("Notes", f"{len(self.notes)}  ({sum(1 for n in self.notes if n.is_hold)} holds)  {self.lanes}K"
+                      + (f"  -  {len(self.selection)} selected" if self.selection else "")),
+            ("Health drain", f"{self.drain:.1f}x" + ("" if "health_drain" in self.meta else "  (default)")
+                             + "   , / ."),
         ]
-        y = r.y + self.s(104)
+        y = r.y + self.s(100)
         for name, value in lines:
             self.fonts.draw(surf, name, (x, y), "bold", 19, theme.c("text_dim"), outline=2)
-            self.fonts.draw(surf, value, (x + self.s(130), y), "bold", 20, (255, 255, 255), outline=2)
-            y += self.s(30)
+            self.fonts.draw(surf, value, (x + self.s(130), y), "bold", 20, (255, 255, 255), outline=2,
+                            max_width=r.width / self.ui.scale - 180)
+            y += self.s(27)
         status = []
         if self.conductor.running and self.record:
             blink = int(time.perf_counter() * 2) % 2 == 0
@@ -660,7 +875,7 @@ class EditorScene(Scene):
         sx = x
         for text, color in status:
             if text:
-                rect = self.fonts.draw(surf, text, (sx, r.y + self.s(286)), "display", 21, color, outline=3)
+                rect = self.fonts.draw(surf, text, (sx, r.y + self.s(294)), "display", 21, color, outline=3)
                 sx = rect.right + self.s(18)
         for b in self.buttons:
             b.draw(surf)
@@ -672,7 +887,7 @@ class EditorScene(Scene):
                 pygame.draw.line(surf, theme.c("ink"), (nx, self.timeline.y + 3), (nx, self.timeline.bottom - 3), 1)
         keys = "/".join(k.upper() for k in self.app.settings.keys_for(self.lanes))
         play_key = "Space" if pygame.K_SPACE in self.play_keys else "Enter"
-        hint = f"{play_key} play  -  {keys} record  -  H help"
+        hint = f"{play_key} play  -  {keys} record  -  Ctrl+C/V copy/paste  -  H help"
         self.fonts.draw(surf, hint, (r.centerx, self.timeline.bottom + self.s(10)), "ui", 16, theme.c("text_dim"),
                         anchor="midtop", outline=2)
 
@@ -683,8 +898,12 @@ class EditorScene(Scene):
         surf.blit(self.help_img, r)
         self.fonts.draw(surf, "Mapping keys", (r.centerx, r.y + self.s(16)), "display", 34, (255, 255, 255),
                         anchor="midtop", outline=4, shadow=4)
-        y = r.y + self.s(72)
-        for key, what in HELP:
-            self.fonts.draw(surf, key, (r.x + self.s(36), y), "bold", 18, self.theme.c("accent2"), outline=2)
-            self.fonts.draw(surf, what, (r.x + self.s(230), y), "ui", 18, (255, 255, 255), outline=2)
-            y += self.s(27)
+        half = (len(HELP) + 1) // 2
+        for col, items in enumerate((HELP[:half], HELP[half:])):
+            x = r.x + self.s(30) + col * self.s(580)
+            y = r.y + self.s(72)
+            for key, what in items:
+                self.fonts.draw(surf, key, (x, y), "bold", 17, self.theme.c("accent2"), outline=2)
+                self.fonts.draw(surf, what, (x + self.s(170), y), "ui", 17, (255, 255, 255), outline=2,
+                                max_width=390)
+                y += self.s(31)

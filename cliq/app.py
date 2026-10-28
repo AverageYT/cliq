@@ -109,6 +109,7 @@ class App:
         self._fade_surface = pygame.Surface(self.size)
         self._fade_surface.fill(self.theme.c("ink"))
         self.demo_job: "_DemoInstall | None" = None
+        self.editor_clipboard: list = []        # copied notes, shared by every chart in the editor
 
         errors = load_mod_files(paths.MODS_DIR)
         if paths.ROOT / "mods" != paths.MODS_DIR:
@@ -156,6 +157,13 @@ class App:
 
     def pop(self, instant: bool = False, **result) -> None:
         self._request(("pop", None, result), instant)
+
+    def cut_in(self, scene) -> None:
+        """Push ``scene`` now and fade it in from black (the caller already animated the way out)."""
+        self._apply(("push", scene, {}))
+        self._pending = None
+        self._fading_in = True
+        self._fade = 0.0
 
     def _request(self, action, instant: bool) -> None:
         if instant or not self.stack:

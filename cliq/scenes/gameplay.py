@@ -23,6 +23,7 @@ from ..modes import get_mode
 from ..render import vector as V
 from ..render.background import Background
 from ..render.fx import ease_out_back
+from ..render.video import VideoBackground, image_background
 from ..render.widgets import Button, ButtonGroup, panel
 from ..util import darken, hex_to_rgb, lighten, mix
 from .base import Scene
@@ -75,6 +76,16 @@ class GameplayScene(Scene):
         self.conductor = Conductor(app.audio, offset_ms=settings.audio_offset_ms)
         self.background = Background(self.size, self.theme, self.ui.scale, seed=len(song.id),
                                      dim=settings.background_dim)
+        self.video = None
+        self.still = None
+        if settings.song_backgrounds:
+            kind, path = song.background_kind(), song.background_path()
+            if kind == "video":
+                self.video = VideoBackground(path, self.size, dim=settings.song_background_dim)
+                if song.cover_path and song.cover_path.exists():   # shown until the first frame arrives
+                    self.still = image_background(song.cover_path, self.size, dim=settings.song_background_dim)
+            elif kind == "image":
+                self.still = image_background(path, self.size, dim=settings.song_background_dim)
         self.hitsounds = settings.hitsounds
         self.hit_volume = settings.hitsound_volume * settings.sfx_volume
 
@@ -142,6 +153,8 @@ class GameplayScene(Scene):
 
     def leave(self) -> None:
         self.conductor.stop()
+        if self.video is not None:
+            self.video.close()
         gc.enable()
 
     # ------------------------------------------------------------ bus handlers
@@ -265,6 +278,8 @@ class GameplayScene(Scene):
             self.session.update(t)
         self.view.update(dt, t)
         self.background.update(dt, float(self.grid.beat_at(t)))
+        if self.video is not None:
+            self.video.update(t)
         self.popup_age += dt
         self.combo_bump = max(0.0, self.combo_bump - dt * 6)
         for tick in self.error_ticks:
@@ -293,7 +308,12 @@ class GameplayScene(Scene):
     # ------------------------------------------------------------ drawing
     def draw(self, surf) -> None:
         t = self.conductor.time
-        self.background.draw(surf)
+        if self.video is not None and self.video.ready:
+            self.video.draw(surf)
+        elif self.still is not None:
+            surf.blit(self.still, (0, 0))
+        else:
+            self.background.draw(surf)
         self.view.draw(surf, t)
         self._draw_hud(surf, t)
         self._draw_countdown(surf, t)

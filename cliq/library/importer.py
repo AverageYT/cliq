@@ -64,10 +64,19 @@ def pick_preview(analysis) -> float:
     return max(0.0, grid.measure_step(t + 0.01, -1))
 
 
+BACKGROUNDS = ("video720", "video1080", "image", "none")
+BACKGROUND_LABELS = {"video720": "Video 720p", "video1080": "Video 1080p", "image": "Thumbnail", "none": "Nothing"}
+
+
 def import_song(source: str, library: SongLibrary | None = None, lanes: int = 4, difficulties=None,
                 title: str | None = None, artist: str | None = None, progress=None, cancelled=None,
-                stage=None) -> tuple[Song, bool]:
-    """Import ``source`` (URL or file path). Returns (song, already_existed)."""
+                stage=None, background: str = "image") -> tuple[Song, bool]:
+    """Import ``source`` (URL or file path). Returns (song, already_existed).
+
+    ``background`` picks what plays behind the notes: ``video720``/``video1080``
+    (the video track, downloaded or copied from a local video file), ``image``
+    (the thumbnail / album art) or ``none``.
+    """
     library = library or SongLibrary()
     difficulties = difficulties or difficulty_ids()
     report = progress or (lambda f: None)
@@ -85,12 +94,15 @@ def import_song(source: str, library: SongLibrary | None = None, lanes: int = 4,
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True, exist_ok=True)
     thumb = None
+    video = None
+    want_video = background.startswith("video")
     try:
         if youtube.is_url(source):
             url = youtube.normalize_url(source)
             set_stage("Downloading audio")
+            share = 0.3 if want_video else 0.4
             try:
-                res = youtube.download_audio(url, work, progress=lambda f: report(0.4 * f), cancelled=cancelled)
+                res = youtube.download_audio(url, work, progress=lambda f: report(share * f), cancelled=cancelled)
             except youtube.DownloadCancelled as exc:
                 raise Cancelled() from exc
             except youtube.DownloadFailed as exc:
@@ -100,6 +112,16 @@ def import_song(source: str, library: SongLibrary | None = None, lanes: int = 4,
             if existing:
                 return existing, True
             media, thumb = res.path, res.thumbnail
+            if want_video:
+                set_stage("Downloading video")
+                height = 1080 if background == "video1080" else 720
+                try:
+                    video = youtube.download_video(url, work, height, progress=lambda f: report(0.3 + 0.1 * f),
+                                                   cancelled=cancelled)
+                except youtube.DownloadCancelled as exc:
+                    raise Cancelled() from exc
+                except youtube.DownloadFailed:
+                    video = None        # not fatal: fall back to the thumbnail
             title = title or res.title
             artist = artist or res.artist
             src_info = {"type": "url", "url": res.url, "key": key}
@@ -161,6 +183,19 @@ def import_song(source: str, library: SongLibrary | None = None, lanes: int = 4,
 
             cover = _save_cover(thumb, media, folder)
             song.cover = cover.name if cover else None
+            if want_video:
+                set_stage("Saving video")
+                try:
+                    clip = video and ffmpeg.extract_video(video, folder / "background")
+                    clip = clip or (None if video else ffmpeg.extract_video(media, folder / "background"))
+                except ffmpeg.FFmpegError:
+                    clip = None
+                if clip is not None:
+                    song.background = {"type": "video", "file": clip.name}
+            if not song.background and background != "none" and cover is not None:
+                song.background = {"type": "image", "file": cover.name}
+            if background == "none":
+                song.background = {"type": "none"}
             song.save()
             library.songs.insert(0, song)
             report(1.0)
@@ -212,9 +247,10 @@ def install_demo_song(library: SongLibrary, lanes: int = 4) -> Song | None:
 class ImportJob(threading.Thread):
     """Background import with progress for the UI."""
 
-    def __init__(self, source: str, library: SongLibrary, lanes: int = 4):
+    def __init__(self, source: str, library: SongLibrary, lanes: int = 4, background: str = "image"):
         super().__init__(daemon=True)
         self.source = source
+        self.background = background
         self.library = library
         self.lanes = lanes
         self.progress = 0.0
@@ -245,7 +281,8 @@ class ImportJob(threading.Thread):
         try:
             self.song, self.already_existed = import_song(
                 self.source, self.library, lanes=self.lanes, progress=self._progress,
-                cancelled=self._cancel.is_set, stage=self._stage)
+                cancelled=self._cancel.is_set, stage=self._stage,
+                background=self.background)
         except Cancelled:
             self.error = "Import cancelled."
         except ImportFailed as exc:

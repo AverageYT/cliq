@@ -25,7 +25,8 @@ DEFAULT_KEYBINDS: dict[str, list[str]] = {
 
 SCROLL_DIRECTIONS = ("down", "up")
 NOTE_SKINS = ("arrows", "circles", "bars")
-DIFFICULTIES = ("easy", "normal", "hard", "expert")
+DIFFICULTIES = ("easy", "normal", "hard", "expert", "master")
+IMPORT_BACKGROUNDS = ("video720", "video1080", "image", "none")
 
 
 @dataclass
@@ -46,6 +47,8 @@ class Settings:
     show_hit_error: bool = True
     show_beat_lines: bool = True
     background_dim: float = 0.3
+    song_backgrounds: bool = True
+    song_background_dim: float = 0.55
     countdown: bool = True
 
     # --- audio
@@ -56,6 +59,9 @@ class Settings:
     audio_offset_ms: float = 0.0
     audio_buffer: int = 512
     song_preview: bool = True
+
+    # --- importing
+    import_background: str = "video720"
 
     # --- display
     resolution: list[int] = field(default_factory=lambda: [1280, 720])   # classic window backend only
@@ -75,6 +81,7 @@ class Settings:
     enabled_modifiers: list[str] = field(default_factory=list)
     last_song: str | None = None
     last_difficulty: str | None = None
+    last_mode: str = "keys"
 
     # ------------------------------------------------------------------ io
     @classmethod
@@ -118,6 +125,8 @@ class Settings:
         if self.default_difficulty not in DIFFICULTIES:
             self.default_difficulty = "normal"
         self.lane_count = max(4, min(7, int(self.lane_count)))
+        if self.import_background not in IMPORT_BACKGROUNDS:
+            self.import_background = "video720"
         if self.render_quality not in ("auto", "720p", "900p", "1080p", "1440p", "native"):
             self.render_quality = "auto"
         if not (isinstance(self.resolution, list) and len(self.resolution) == 2):
@@ -182,6 +191,10 @@ SETTINGS_MENU: list[SettingSpec] = [
     SettingSpec("countdown", "Countdown", "toggle", "Gameplay"),
     SettingSpec("background_dim", "Background dim", "number", "Gameplay", lo=0.0, hi=0.9, step=0.05,
                 fmt="{:.0%}"),
+    SettingSpec("song_backgrounds", "Song backgrounds", "toggle", "Gameplay",
+                help="Play the song's video or thumbnail behind the notes (chosen when importing)."),
+    SettingSpec("song_background_dim", "Video dim", "number", "Gameplay", lo=0.0, hi=0.95, step=0.05,
+                fmt="{:.0%}", help="How much the song video / thumbnail is darkened behind the notes."),
     SettingSpec("keybinds", "Key bindings", "keys", "Controls"),
     SettingSpec("music_volume", "Music volume", "number", "Audio", lo=0.0, hi=1.0, step=0.05, fmt="{:.0%}"),
     SettingSpec("sfx_volume", "Effects volume", "number", "Audio", lo=0.0, hi=1.0, step=0.05, fmt="{:.0%}"),

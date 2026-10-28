@@ -7,6 +7,7 @@ Each song is a folder in ``songs/``::
         audio.ogg        playback audio (converted on import)
         analysis.npz     cached beat/onset analysis (re-chart instantly)
         cover.jpg        optional thumbnail
+        background.mp4   optional video shown behind the notes (or .mkv)
         charts/<difficulty>.json
 
 Charts you make in the mapping editor live in the same ``charts`` folder, so a
@@ -43,6 +44,7 @@ class Song:
     cover: str | None = None
     created: float = 0.0
     lanes: int = 4
+    background: dict = field(default_factory=dict)   # {"type": "video"|"image"|"none", "file": ...}
     extra: dict = field(default_factory=dict)
 
     # ------------------------------------------------------------ paths
@@ -53,6 +55,44 @@ class Song:
     @property
     def cover_path(self) -> Path | None:
         return self.folder / self.cover if self.cover else None
+
+    def background_kind(self) -> str:
+        """What plays behind the notes: "video", "image" or "none" (old songs use the cover)."""
+        kind = self.background.get("type")
+        if kind in ("video", "image") and (self.folder / str(self.background.get("file", ""))).is_file():
+            return kind
+        if kind is None and self.cover_path and self.cover_path.exists():
+            return "image"
+        return "none"
+
+    def background_path(self) -> Path | None:
+        kind = self.background_kind()
+        if kind == "none":
+            return None
+        return self.folder / self.background["file"] if self.background.get("file") else self.cover_path
+
+    def background_choices(self) -> list[str]:
+        """Background kinds this song has files for, for cycling in song select."""
+        choices = []
+        if self.video_file():
+            choices.append("video")
+        if self.cover_path and self.cover_path.exists():
+            choices.append("image")
+        return choices + ["none"]
+
+    def video_file(self) -> Path | None:
+        for p in sorted(self.folder.glob("background.*")):
+            if p.suffix.lower() in (".mp4", ".mkv", ".webm", ".mov"):
+                return p
+        return None
+
+    def set_background(self, kind: str) -> None:
+        if kind == "video" and self.video_file():
+            self.background = {"type": "video", "file": self.video_file().name}
+        elif kind == "image" and self.cover:
+            self.background = {"type": "image", "file": self.cover}
+        else:
+            self.background = {"type": "none"}
 
     @property
     def charts_dir(self) -> Path:
@@ -126,7 +166,9 @@ class Song:
             "format": SONG_FORMAT, "version": 1, "id": self.id, "title": self.title, "artist": self.artist,
             "audio": self.audio, "duration": round(self.duration, 3), "timing": self.grid.to_dict(),
             "preview": round(self.preview, 3), "source": self.source, "cover": self.cover,
-            "created": self.created, "lanes": self.lanes, **({"extra": self.extra} if self.extra else {}),
+            "created": self.created, "lanes": self.lanes,
+            **({"background": self.background} if self.background else {}),
+            **({"extra": self.extra} if self.extra else {}),
         }
 
     def save(self) -> None:
@@ -145,7 +187,7 @@ class Song:
                        grid=BeatGrid.from_dict(data.get("timing") or {}), preview=float(data.get("preview") or 0.0),
                        source=dict(data.get("source") or {}), cover=data.get("cover"),
                        created=float(data.get("created") or 0.0), lanes=int(data.get("lanes") or 4),
-                       extra=dict(data.get("extra") or {}))
+                       background=dict(data.get("background") or {}), extra=dict(data.get("extra") or {}))
         except (TypeError, ValueError):
             return None
 
