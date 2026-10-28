@@ -217,12 +217,28 @@ def create_modifiers(ids) -> list[Modifier]:
     return mods
 
 
+def chart_health_drain(chart: Chart) -> float:
+    """Health-loss multiplier stored in the chart, defaulting by its difficulty."""
+    value = chart.meta.get("health_drain")
+    if value is None:
+        from ..charting.profiles import load_profiles
+
+        profile = load_profiles().get(chart.difficulty.split("-")[-1])
+        value = profile.health_drain if profile else 1.0
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        return 1.0
+
+
 def prepare_play(chart: Chart, modifier_ids, ghost_tapping: bool = True, no_fail: bool = False,
-                 seed: int = 0) -> tuple[Chart, Rules, list[Modifier]]:
+                 seed: int = 0, anti_spam: bool = True) -> tuple[Chart, Rules, list[Modifier]]:
     """Build the (chart copy, rules, modifiers) triple for one play."""
     rules = load_rules()
     rules.ghost_tapping = ghost_tapping
     rules.no_fail = no_fail
+    rules.anti_spam = anti_spam
+    rules.health_loss_scale *= chart_health_drain(chart)
     mods = create_modifiers(modifier_ids)
     for m in mods:
         m.apply_rules(rules)

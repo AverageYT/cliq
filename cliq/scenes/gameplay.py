@@ -60,7 +60,8 @@ class GameplayScene(Scene):
         settings = app.settings
         seed = sum(map(ord, song.id)) + int(time.time()) % 1000
         play_chart, self.rules, self.mods = prepare_play(chart, self.modifier_ids, settings.ghost_tapping,
-                                                         settings.no_fail, seed=seed)
+                                                         settings.no_fail, seed=seed,
+                                                         anti_spam=settings.anti_spam)
         self.bus = EventBus()
         self.session = PlaySession(play_chart, self.rules, self.mods, self.bus,
                                    start_time=start_time if start_time is not None else -math.inf)
@@ -70,6 +71,7 @@ class GameplayScene(Scene):
         w, h = self.size
         self.playfield = Playfield(self.theme, settings, self.lanes, self.ui.scale, self.size,
                                    speed_scale=self.rules.scroll_speed_scale)
+        self.rules.anti_spam_horizon = self.playfield.ahead   # only notes you can already see
         self.times = [n.time for n in self.session.notes]
         self.max_hold = max((n.end - n.time for n in self.session.notes), default=0.0)
         alpha_mods = [m for m in self.mods if type(m).note_alpha is not Modifier.note_alpha]

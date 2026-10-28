@@ -232,6 +232,12 @@ class PlaySession:
 
     def _ghost(self, lane: int, t: float) -> None:
         self.bus.emit("ghost_tap", session=self, lane=lane, time=t)
+        if self.rules.anti_spam:
+            # A stray press costs the next note coming down this lane: mashing never pays.
+            ns = self.next_note(lane)
+            if ns is not None and ns.time - t <= self.rules.anti_spam_horizon:
+                self._miss(ns)
+                self.bus.emit("spam_penalty", session=self, note=ns, lane=lane)
         if not self.rules.ghost_tapping:
             self._break_combo(None)
             self._change_health(self.rules.ghost_tap_health)

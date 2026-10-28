@@ -48,6 +48,8 @@ class Rules:
     health_gain_scale: float = 1.0
     health_loss_scale: float = 1.0
     ghost_tapping: bool = True
+    anti_spam: bool = True           # a press with no note in range misses the next note in that lane
+    anti_spam_horizon: float = 1.0   # ...if that note is within this many seconds (set to the visible range)
     no_fail: bool = False
     sudden_death: bool = False
     autoplay: bool = False

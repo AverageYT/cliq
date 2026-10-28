@@ -27,7 +27,7 @@ def test_import_local_file(cliq_home, tmp_path):
     song, existed = import_song(str(src), lib)
     assert not existed
     assert song.audio_path.exists() and song.analysis_path.exists()
-    assert song.chart_names() == ["easy", "normal", "hard", "expert"]
+    assert song.chart_names() == ["easy", "normal", "hard", "expert", "master"]
     assert song.title == "My Track"
     assert abs(song.grid.bpm - 120.0) < 0.1
     assert lib.scan()[0].id == song.id

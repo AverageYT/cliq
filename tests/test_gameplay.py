@@ -29,7 +29,7 @@ def test_perfect_hit_and_windows():
 
 
 def test_too_early_press_is_ghost_and_note_waits():
-    s, ev = make_session([(1.0, 0)])
+    s, ev = make_session([(1.0, 0)], anti_spam=False)
     assert s.press(0, 0.5) is None
     assert ev[-1][0] == "ghost_tap"
     assert s.press(0, 1.0).result == "perfect"
@@ -146,3 +146,23 @@ def test_sudden_death():
 def test_registry_has_builtins():
     assert {"autoplay", "mirror", "hidden", "sudden", "shield"} <= set(REGISTRY)
     assert all(m.name for m in create_modifiers(list(REGISTRY)))
+
+
+def test_anti_spam_costs_the_next_visible_note():
+    s, ev = make_session([(1.0, 0), (5.0, 0)])
+    s.rules.anti_spam_horizon = 0.8
+    assert s.press(0, 0.5) is None                 # stray press 0.5 s early -> that note is lost
+    assert s.notes[0].result == "miss" and s.combo == 0
+    assert s.press(0, 2.0) is None                 # next note is 3 s away: out of range, nothing lost
+    assert s.notes[1].result is None
+    assert s.press(0, 5.01).result == "perfect"
+
+
+def test_health_drain_comes_from_chart():
+    from cliq.gameplay.modifiers import chart_health_drain
+
+    chart = Chart(lanes=4, difficulty="master", notes=[Note(1.0, 0)])
+    assert chart_health_drain(chart) == 2.0          # default from the master profile
+    chart.meta["health_drain"] = 0.5
+    _, rules, _ = prepare_play(chart, [])
+    assert rules.health_loss_scale == 0.5

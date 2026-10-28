@@ -33,6 +33,10 @@ class DifficultyProfile:
     hold_sustain: float = 0.45
     hold_release_beats: float = 0.5
     jack_gap_s: float = 0.4          # minimum time between two notes in one lane
+    fill_level: int = 1              # add grid notes in busy sections up to this level (1 beat, 2 8th, 3 16th)
+    ramp: list[float] = field(default_factory=lambda: [0.75, 0.9, 1.0, 1.15])   # density per quarter
+    ramp_gap: list[float] = field(default_factory=lambda: [1.0, 1.0, 1.0, 1.0])  # spacing per quarter
+    health_drain: float = 1.0        # multiplier on health lost (saved into the chart)
 
     def with_overrides(self, **overrides) -> "DifficultyProfile":
         known = {f.name for f in dataclasses.fields(self)}

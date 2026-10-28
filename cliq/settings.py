@@ -41,6 +41,7 @@ class Settings:
     lane_width: int = 104
     default_difficulty: str = "normal"
     ghost_tapping: bool = True
+    anti_spam: bool = True
     no_fail: bool = False
     show_hit_error: bool = True
     show_beat_lines: bool = True
@@ -173,6 +174,8 @@ SETTINGS_MENU: list[SettingSpec] = [
     SettingSpec("default_difficulty", "Default difficulty", "choice", "Gameplay", choices=DIFFICULTIES),
     SettingSpec("ghost_tapping", "Ghost tapping", "toggle", "Gameplay",
                 help="On: pressing with no note nearby is never punished."),
+    SettingSpec("anti_spam", "Anti-spam", "toggle", "Gameplay",
+                help="A press with no note nearby makes you miss the next note in that lane."),
     SettingSpec("no_fail", "No fail", "toggle", "Gameplay", help="Keep playing when health runs out."),
     SettingSpec("show_hit_error", "Timing bar", "toggle", "Gameplay", help="Shows how early/late each hit was."),
     SettingSpec("show_beat_lines", "Beat lines", "toggle", "Gameplay"),

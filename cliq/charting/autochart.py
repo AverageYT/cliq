@@ -30,7 +30,7 @@ from .beatgrid import BeatGrid
 from .chart import Chart, Note
 from .profiles import DifficultyProfile, get_profile
 
-GENERATOR_VERSION = 1
+GENERATOR_VERSION = 2
 
 # level ids: 0 measure start, 1 beat, 2 eighth, 3 sixteenth, 4 triplet, 5 finer
 METRIC_WEIGHT = {0: 1.3, 1: 1.15, 2: 0.95, 3: 0.8, 4: 0.72, 5: 0.6}
@@ -99,7 +99,7 @@ def generate_chart(analysis, difficulty: str | DifficultyProfile = "normal", lan
     grid = grid or analysis.grid()
     lanes = max(1, int(lanes))
     meta = {"generator": f"auto v{GENERATOR_VERSION}", "profile": profile.id, "seed": seed,
-            "bpm": round(grid.bpm, 3)}
+            "bpm": round(grid.bpm, 3), "health_drain": profile.health_drain}
     chart = Chart(lanes=lanes, difficulty=profile.id, notes=[], meta=meta)
 
     ons = analysis.onsets
@@ -167,14 +167,23 @@ def generate_chart(analysis, difficulty: str | DifficultyProfile = "normal", lan
     score = np.where(has_onset, rel * np.vectorize(METRIC_WEIGHT.get)(levels), 0.0)
     energy = loud.energy(times)
     active = loud.active(times)
-    # steady pulse on beats in busy sections
-    pulse_ok = (levels <= 1) & active & (energy >= 0.55) & ~has_onset
-    score = np.where(pulse_ok, np.maximum(score, profile.pulse * energy), score)
+    # steady pulse on beats (and, on hard charts, 8ths/16ths) in busy sections
+    fill_weight = np.where(levels <= 1, 1.0, np.where(levels == 2, 0.8, 0.6))
+    pulse_ok = (levels <= max(1, profile.fill_level)) & (levels != 4) & active & (energy >= 0.55) & ~has_onset
+    score = np.where(pulse_ok, np.maximum(score, profile.pulse * energy * fill_weight), score)
     # triplets only where an onset clearly asks for one
     score = np.where((levels == 4) & (rel < 0.6), 0.0, score)
     score = np.where(active | has_onset, score, 0.0)
 
     # ------------------------------------------------------------ 4. select
+    # The song is split into four equal parts that get progressively harder.
+    span = max(1e-6, end_t - start_t)
+    ramp = list(profile.ramp) + [profile.ramp[-1]] * (4 - len(profile.ramp)) if profile.ramp else [1.0] * 4
+    ramp_gap = list(profile.ramp_gap) + [1.0] * (4 - len(profile.ramp_gap)) if profile.ramp_gap else [1.0] * 4
+
+    def quarter(t: float) -> int:
+        return int(min(3, max(0, (t - start_t) / span * 4)))
+
     measure_of = np.floor((beats - grid.downbeat) / grid.beats_per_measure).astype(int)
     chosen_times: list[float] = []
     chosen: list[int] = []
@@ -184,13 +193,15 @@ def generate_chart(analysis, difficulty: str | DifficultyProfile = "normal", lan
             continue
         m_start = grid.time_at(m * grid.beats_per_measure + grid.downbeat)
         m_end = grid.time_at((m + 1) * grid.beats_per_measure + grid.downbeat)
-        budget = max(1, int(round(profile.nps * float(np.mean(energy[idx])) * (m_end - m_start))))
+        q = quarter((m_start + m_end) / 2)
+        loudness = 0.55 + 0.45 * float(np.mean(energy[idx]))
+        budget = max(1, int(round(profile.nps * ramp[q] * loudness * (m_end - m_start))))
         taken = 0
         for j in idx[np.argsort(-score[idx], kind="stable")]:
             if taken >= budget:
                 break
             t = times[j]
-            gap = max(profile.min_gap_beats * grid.beat_length_at(t), profile.min_gap_s) - 1e-4
+            gap = max(profile.min_gap_beats * grid.beat_length_at(t), profile.min_gap_s) * ramp_gap[q] - 1e-4
             p = bisect.bisect_left(chosen_times, t)
             if p > 0 and t - chosen_times[p - 1] < gap:
                 continue
@@ -303,11 +314,17 @@ def generate_chart(analysis, difficulty: str | DifficultyProfile = "normal", lan
             prev_in_lane[note.lane] = note.end
             r, level = rel_of[idx]
             bl = grid.beat_length_at(note.time)
+            r *= ramp[quarter(note.time)]          # more chords as the song builds
             if level > 1 or r < profile.chord_threshold:
                 continue
             if note.time - last_chord < profile.chord_min_gap_beats * bl - 1e-3:
                 continue
-            want = 3 if (profile.max_chord >= 3 and level == 0 and r >= profile.chord3_threshold) else 2
+            want = 2
+            if profile.max_chord >= 3 and r >= profile.chord3_threshold and (level == 0 or profile.max_chord >= 4):
+                want = 3
+            if profile.max_chord >= 4 and level == 0 and r >= profile.chord3_threshold * 1.25:
+                want = 4
+            want = min(want, lanes)
             used = {note.lane}
             for _ in range(want - 1):
                 options = []
