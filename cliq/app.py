@@ -12,6 +12,7 @@ import pygame
 from . import paths
 from .audio import engine
 from .audio.engine import AudioEngine
+from .display import Display
 from .gameplay.modifiers import load_mod_files
 from .library.importer import install_demo_song
 from .library.scores import ScoreBook
@@ -83,9 +84,9 @@ class App:
         self.settings = settings or Settings.load()
         engine.pre_init(self.settings.audio_buffer)
         pygame.init()
-        self.size = (int(self.settings.resolution[0]), int(self.settings.resolution[1]))
-        self.scale = self.size[1] / 720.0
         self.screen = self._open_window()
+        self.size = self.display.size
+        self.scale = self.size[1] / 720.0
         self.theme = get_theme()
         self.fonts = FontBook(self.theme, self.scale)
         self.audio = AudioEngine(self.settings.audio_buffer)
@@ -121,17 +122,10 @@ class App:
 
     # ------------------------------------------------------------ window
     def _open_window(self) -> pygame.Surface:
-        flags = pygame.SCALED
-        if self.settings.fullscreen:
-            flags |= pygame.FULLSCREEN
-        pygame.display.set_caption("Cliq")
+        self.display = Display(self.settings)
+        screen = self.display.open()
         try:
-            screen = pygame.display.set_mode(self.size, flags, vsync=1 if self.settings.vsync else 0)
-        except pygame.error:
-            screen = pygame.display.set_mode(self.size, flags)
-        try:
-            icon = V.glossy_shape(64, V.arrow_points(), self.theme_color("up"), (27, 18, 54))
-            pygame.display.set_icon(icon)
+            self.display.set_icon(V.glossy_shape(64, V.arrow_points(), self.theme_color("up"), (27, 18, 54)))
         except pygame.error:
             pass
         return screen
@@ -140,15 +134,9 @@ class App:
     def theme_color(direction: str):
         return get_theme().lane_colors.get(direction, (255, 255, 255))
 
-    def reopen_window(self) -> None:
-        self.screen = self._open_window()
-
     def toggle_fullscreen(self) -> None:
         self.settings.fullscreen = not self.settings.fullscreen
-        try:
-            pygame.display.toggle_fullscreen()
-        except pygame.error:
-            self.reopen_window()
+        self.display.toggle_fullscreen(self.settings.fullscreen)
         self.settings.save()
 
     # ------------------------------------------------------------ audio helpers
@@ -231,7 +219,7 @@ class App:
             elif e.type == pygame.KEYDOWN and e.key == pygame.K_F12:
                 self.screenshot()
             elif self._pending is None and self.scene is not None:
-                self.scene.handle_event(e)
+                self.scene.handle_event(self.display.map_event(e))
         if self.demo_job is not None and self.demo_job.done:
             if self.demo_job.song:
                 self.toasts.show("Demo song ready - have fun!", self.theme.c("good"))
@@ -256,7 +244,7 @@ class App:
             self.fonts.draw(self.screen, f"{self.fps:.0f} fps", (self.ui.s(10), self.size[1] - self.ui.s(8)),
                             "bold", 16, (255, 255, 255), anchor="bottomleft", outline=2)
         self._transition(dt)
-        pygame.display.flip()
+        self.display.present()
 
     def _transition(self, dt: float) -> None:
         if self._pending is None and not self._fading_in:

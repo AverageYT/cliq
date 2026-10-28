@@ -57,7 +57,8 @@ class Settings:
     song_preview: bool = True
 
     # --- display
-    resolution: list[int] = field(default_factory=lambda: [1280, 720])
+    resolution: list[int] = field(default_factory=lambda: [1280, 720])   # classic window backend only
+    render_quality: str = "auto"
     fullscreen: bool = False
     vsync: bool = False
     fps_cap: int = 480
@@ -116,6 +117,8 @@ class Settings:
         if self.default_difficulty not in DIFFICULTIES:
             self.default_difficulty = "normal"
         self.lane_count = max(4, min(7, int(self.lane_count)))
+        if self.render_quality not in ("auto", "720p", "900p", "1080p", "1440p", "native"):
+            self.render_quality = "auto"
         if not (isinstance(self.resolution, list) and len(self.resolution) == 2):
             self.resolution = [1280, 720]
 
@@ -189,7 +192,10 @@ SETTINGS_MENU: list[SettingSpec] = [
                 help="Smaller = less latency. Raise it if you hear crackling."),
     SettingSpec("song_preview", "Song previews", "toggle", "Audio"),
     SettingSpec("fullscreen", "Fullscreen", "toggle", "Display"),
-    SettingSpec("vsync", "VSync", "toggle", "Display", help="Off gives the lowest input latency."),
+    SettingSpec("render_quality", "Render quality", "choice", "Display",
+                choices=("auto", "720p", "900p", "1080p", "1440p", "native"),
+                help="Sharper at higher settings, but costs more CPU per frame. Restart to apply."),
+    SettingSpec("vsync", "VSync", "toggle", "Display", help="Off gives the lowest input latency. Restart to apply."),
     SettingSpec("fps_cap", "FPS cap", "choice", "Display", choices=(144, 240, 360, 480, 1000)),
     SettingSpec("show_fps", "Show FPS", "toggle", "Display"),
 ]

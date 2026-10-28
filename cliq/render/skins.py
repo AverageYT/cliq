@@ -15,6 +15,7 @@ import math
 import pygame
 
 from .. import paths
+from ..display import prepare
 from ..util import darken, lighten, mix
 from . import vector as V
 from .theme import Theme
@@ -70,7 +71,7 @@ class NoteSkin:
         if not path.exists():
             return None
         try:
-            img = pygame.image.load(str(path)).convert_alpha()
+            img = prepare(pygame.image.load(str(path)), alpha=True)
         except pygame.error:
             return None
         w, h = img.get_size()

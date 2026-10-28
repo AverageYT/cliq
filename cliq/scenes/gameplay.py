@@ -393,12 +393,16 @@ class GameplayScene(Scene):
         self.fonts.draw(surf, self.song.artist, (self.s(26), self.s(56)), "ui", 19, theme.c("text_dim"), outline=2,
                         max_width=info_w)
         x = self.s(26)
-        for label, color in [(self.difficulty.title(), theme.c("accent2"))] + \
-                            [(m.name, hex_to_rgb(m.color)) for m in self.mods]:
-            img = self.fonts.render(label, "bold", 16, theme.c("ink"))
-            box = V.rounded_rect((img.get_width() + self.s(18), self.s(28)), self.s(14), color, theme.c("ink"),
-                                 outline=max(2, self.s(2.5)))
-            box.blit(img, img.get_rect(center=(box.get_width() / 2, self.s(14))))
+        if not hasattr(self, "_pills"):
+            self._pills = []
+            for label, color in [(self.difficulty.title(), theme.c("accent2"))] + \
+                                [(m.name, hex_to_rgb(m.color)) for m in self.mods]:
+                img = self.fonts.render(label, "bold", 16, theme.c("ink"))
+                box = V.rounded_rect((img.get_width() + self.s(18), self.s(28)), self.s(14), color, theme.c("ink"),
+                                     outline=max(2, self.s(2.5)))
+                box.blit(img, img.get_rect(center=(box.get_width() / 2, self.s(14))))
+                self._pills.append(box)
+        for box in self._pills:
             surf.blit(box, (x, self.s(88)))
             x += box.get_width() + self.s(6)
 

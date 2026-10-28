@@ -81,8 +81,8 @@ class SettingsScene(Scene):
         if key == "fullscreen":
             s.fullscreen = not s.fullscreen  # toggle_fullscreen flips it back and applies
             app.toggle_fullscreen()
-        elif key == "vsync":
-            app.reopen_window()
+        elif key in ("vsync", "render_quality"):
+            app.toasts.show("Restart the game to apply this")
         elif key == "audio_buffer":
             song = app.menu_music.song
             app.audio.reinit(s.audio_buffer)

@@ -8,6 +8,7 @@ import zlib
 import pygame
 
 from ..charting.autochart import generate_chart
+from ..display import prepare
 from ..charting.profiles import get_profile, load_profiles
 from ..gameplay.modifiers import REGISTRY
 from ..render import vector as V
@@ -297,7 +298,7 @@ class SongSelectScene(Scene):
         base = None
         if song.cover_path and song.cover_path.exists():
             try:
-                raw = pygame.image.load(str(song.cover_path)).convert()
+                raw = prepare(pygame.image.load(str(song.cover_path)))
                 rw, rh = raw.get_size()
                 side = min(rw, rh)
                 raw = raw.subsurface(((rw - side) // 2, (rh - side) // 2, side, side))
